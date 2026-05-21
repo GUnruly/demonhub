@@ -16,7 +16,6 @@ local PGui = LP:WaitForChild("PlayerGui")
 --  GETGENV STATE  (persists across re-runs)
 -- ══════════════════════════════════════════════════
 getgenv().WalkSpeed         = getgenv().WalkSpeed         or 12
-getgenv().JumpPower         = getgenv().JumpPower         or 50
 getgenv().FlyEnabled        = getgenv().FlyEnabled        or false
 getgenv().NoclipEnabled     = getgenv().NoclipEnabled     or false
 getgenv().PlayerESP         = getgenv().PlayerESP         or false
@@ -34,6 +33,8 @@ getgenv().AntiWeave         = getgenv().AntiWeave         or false
 getgenv().PunchSpeed        = getgenv().PunchSpeed        or 1.7
 getgenv().FastmentEnabled   = getgenv().FastmentEnabled   or false
 getgenv().WalkSpeedOverride = getgenv().WalkSpeedOverride or false
+getgenv().Headless          = getgenv().Headless          or false
+getgenv().SavedAccIDs       = getgenv().SavedAccIDs       or {}
 
 -- ══════════════════════════════════════════════════
 --  KEYBIND MANAGER
@@ -67,7 +68,6 @@ local CFG_DIR = "DemonHub"
 local function cfgEncode()
     local t = {
         walkSpeed        = getgenv().WalkSpeed,
-        jumpPower        = getgenv().JumpPower,
         fly              = getgenv().FlyEnabled,
         noclip           = getgenv().NoclipEnabled,
         playerEsp        = getgenv().PlayerESP,
@@ -84,6 +84,8 @@ local function cfgEncode()
         fastment         = getgenv().FastmentEnabled,
         smartHitbox      = getgenv().SmartHitbox,
         hitboxTeamCheck  = getgenv().HitboxTeamCheck,
+        headless         = getgenv().Headless,
+        accIDs           = getgenv().SavedAccIDs,
     }
     local ok, s = pcall(function() return HttpService:JSONEncode(t) end)
     return ok and s or ""
@@ -92,7 +94,6 @@ end
 local function cfgApply(t)
     if not t then return end
     getgenv().WalkSpeed        = t.walkSpeed   or 12
-    getgenv().JumpPower        = t.jumpPower   or 50
     getgenv().FlyEnabled       = t.fly         or false
     getgenv().NoclipEnabled    = t.noclip      or false
     getgenv().PlayerESP        = t.playerEsp   or false
@@ -109,6 +110,8 @@ local function cfgApply(t)
     getgenv().FastmentEnabled  = t.fastment         or false
     getgenv().SmartHitbox      = t.smartHitbox      or false
     getgenv().HitboxTeamCheck  = t.hitboxTeamCheck  or false
+    getgenv().Headless         = t.headless         or false
+    getgenv().SavedAccIDs      = (type(t.accIDs)=="table") and t.accIDs or {}
 end
 
 local function cfgSave(name)
@@ -167,7 +170,7 @@ LP.CharacterAdded:Connect(function(c)
     local h = c:WaitForChild("Humanoid", 5)
     if h then
         if getgenv().WalkSpeedOverride then h.WalkSpeed = getgenv().WalkSpeed end
-        h.JumpPower = getgenv().JumpPower
+        h.JumpPower = 0   -- no jump in this game
     end
 end)
 spawn(function()
@@ -178,7 +181,6 @@ spawn(function()
             if getgenv().WalkSpeedOverride and h.WalkSpeed ~= getgenv().WalkSpeed then
                 h.WalkSpeed = getgenv().WalkSpeed
             end
-            if h.JumpPower ~= getgenv().JumpPower then h.JumpPower = getgenv().JumpPower end
         end
     end) end
 end)
@@ -194,8 +196,8 @@ local function enableFly()
     hum.PlatformStand = true
     flyBV = Instance.new("BodyVelocity")
     flyBV.Velocity = Vector3.new(0, 0, 0)
-    flyBV.MaxForce = Vector3.new(4e4, 4e4, 4e4)
-    flyBV.P        = 1e4
+    flyBV.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+    flyBV.P        = 5e4
     flyBV.Parent   = hrp
     flyConn = RunService.Heartbeat:Connect(function()
         if not getgenv().FlyEnabled then return end
@@ -432,7 +434,7 @@ end
 
 local function monitorHbPlr(plr)
     if not plr or plr == LP then return end
-    hbAddPlr(plr)
+    evalHbPlr(plr)  -- respects SmartHitbox / HitboxEnabled state immediately
     local charK = plr.UserId.."ch"
     hbDisconn(charK)
     hbConns[charK] = plr.CharacterAdded:Connect(function(c)
@@ -662,9 +664,10 @@ local function panic(gui)
     getgenv().FlyEnabled     = false
     getgenv().NoclipEnabled  = false
     getgenv().PlayerESP      = false
+    getgenv().Headless       = false
     disableFastment(); disableFly()
-    getgenv().WalkSpeed = 12; getgenv().JumpPower = 50
-    getgenv().WalkSpeedOverride = false; applyWalkSpeed()
+    pcall(function() applyHeadless(false) end)
+    getgenv().WalkSpeed = 12; getgenv().WalkSpeedOverride = false; applyWalkSpeed()
     getgenv().PlayerESP = false; disableFPSBoost()
     for p,_ in pairs(hbWL) do hbRemPlr(p) end
     if gui then gui:Destroy() end
@@ -732,11 +735,62 @@ local function refreshESP()
     end
 end
 
-Players.PlayerRemoving:Connect(function(p) removeESP(p) end)
-Players.PlayerAdded:Connect(function(p)
-    p.CharacterAdded:Connect(function() wait(0.2); refreshESP() end)
+Players.PlayerRemoving:Connect(function(p)
+    removeESP(p)  -- destroy highlight immediately on leave
 end)
-spawn(function() while true do wait(0.5); refreshESP() end end)
+Players.PlayerAdded:Connect(function(p)
+    if p == LP then return end
+    p.CharacterAdded:Connect(function(char)
+        if not getgenv().PlayerESP then return end
+        wait(0.15)  -- let character finish loading
+        -- addESP only if not already present
+        if espHL[p] then pcall(function() espHL[p].Adornee = char end); return end
+        local hl = Instance.new("Highlight")
+        hl.Name = "_ESP_"..p.Name
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.FillTransparency  = 0.55
+        hl.OutlineTransparency = 0
+        hl.Adornee = char
+        hl.Parent  = workspace
+        espHL[p] = hl
+        local f, o = espColorFor(p)
+        hl.FillColor = f; hl.OutlineColor = o
+    end)
+    p.CharacterRemoving:Connect(function() removeESP(p) end)
+end)
+-- Hook existing players
+for _, p in ipairs(Players:GetPlayers()) do
+    if p ~= LP then
+        p.CharacterAdded:Connect(function(char)
+            if not getgenv().PlayerESP then return end
+            wait(0.15)
+            if espHL[p] then pcall(function() espHL[p].Adornee = char end); return end
+            local hl = Instance.new("Highlight")
+            hl.Name = "_ESP_"..p.Name
+            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            hl.FillTransparency  = 0.55
+            hl.OutlineTransparency = 0
+            hl.Adornee = char
+            hl.Parent  = workspace
+            espHL[p] = hl
+            local f, o = espColorFor(p)
+            hl.FillColor = f; hl.OutlineColor = o
+        end)
+        p.CharacterRemoving:Connect(function() removeESP(p) end)
+    end
+end
+-- Slow refresh only for color updates (not add/remove — handled by events above)
+spawn(function() while true do wait(2)
+    if getgenv().PlayerESP then
+        for plr, hl in pairs(espHL) do
+            pcall(function()
+                if not plr.Parent then removeESP(plr); return end
+                local f, o = espColorFor(plr)
+                hl.FillColor = f; hl.OutlineColor = o
+            end)
+        end
+    end
+end end)
 
 -- ══════════════════════════════════════════════════
 --  LIGHTING STATE  (fullbright / fog / FOV)
@@ -803,20 +857,29 @@ local function applyFOV(v)
     workspace.CurrentCamera.FieldOfView = v
 end
 
--- ratio: 0 = native, 100 = full 4:3 (1440 wide instead of 1920)
+-- Stretch via RenderStepped CFrame Y-scale  (0 = off, 100 = max 4:3 stretch)
+-- At max: Y-scale = 0.67  (same matrix as user's reference script)
+local stretchConn  = nil
+local stretchScale = 1.0   -- current Y scale factor (updated by slider)
 local function applyStretch(ratio)
-    pcall(function()
-        if ratio <= 0 then
-            if syn and syn.set_viewport_size then syn.set_viewport_size(nil)
-            elseif setresolution then setresolution(1920, 1080) end
-        else
-            local x = math.round(1920 - (1920 - 1440) * (ratio / 100))
-            if syn and syn.set_viewport_size then
-                syn.set_viewport_size(Vector2.new(x, 1080))
-            elseif setresolution then
-                setresolution(x, 1080)
-            end
+    -- ratio 0 → no stretch (scale=1.0), 100 → max stretch (scale=0.67)
+    local target = 1.0 - (1.0 - 0.67) * math.clamp(ratio, 0, 100) / 100
+    stretchScale = target
+    if ratio <= 0 then
+        if stretchConn then stretchConn:Disconnect(); stretchConn = nil end
+        getgenv().StretchActive = nil
+        return
+    end
+    if stretchConn then return end  -- already running; slider update already changed stretchScale
+    getgenv().StretchActive = true
+    local Camera = workspace.CurrentCamera
+    stretchConn = RunService.RenderStepped:Connect(function()
+        if stretchScale >= 0.9999 then
+            stretchConn:Disconnect(); stretchConn = nil
+            getgenv().StretchActive = nil; return
         end
+        Camera.CFrame = Camera.CFrame
+            * CFrame.new(0,0,0, 1,0,0, 0,stretchScale,0, 0,0,1)
     end)
 end
 
@@ -857,6 +920,73 @@ local function disableFPSBoost()
     local RS = game:GetService("ReplicatedStorage")
     local stash = RS:FindFirstChild("_DH_FPS"); if stash then stash:Destroy() end
 end
+
+-- ══════════════════════════════════════════════════
+--  SELF — ACCESSORY + HEADLESS SYSTEM
+-- ══════════════════════════════════════════════════
+
+-- Attach an accessory by asset ID using the user's weld method
+local function attachAccessory(character, id)
+    if not character or not id then return end
+    local head = character:FindFirstChild("Head")
+    if not head then notify("Accessory","No Head found","err",2); return end
+    local ok, result = pcall(function()
+        return game:GetObjects("rbxassetid://" .. tostring(id))
+    end)
+    if not ok or not result or not result[1] then
+        notify("Accessory","Load failed: "..tostring(id),"err",3); return
+    end
+    local asset = result[1]
+    local accessory = asset:IsA("Accessory") and asset
+        or asset:FindFirstChildWhichIsA("Accessory", true)
+    if not accessory then notify("Accessory","No Accessory in asset","err",3); return end
+    accessory = accessory:Clone()
+    local handle = accessory:FindFirstChild("Handle")
+    if not handle then notify("Accessory","No Handle found","err",3); return end
+    local accAtt  = handle:FindFirstChildWhichIsA("Attachment")
+    local headAtt = accAtt and head:FindFirstChild(accAtt.Name)
+    handle.Parent = character
+    if accAtt and headAtt then
+        handle.CFrame = headAtt.WorldCFrame * accAtt.CFrame:Inverse()
+    else
+        handle.CFrame = head.CFrame
+    end
+    local weld = Instance.new("Weld")
+    weld.Part0 = head; weld.Part1 = handle
+    weld.C0 = head.CFrame:Inverse() * handle.CFrame
+    weld.Parent = handle
+    notify("Accessory","Added "..tostring(id),"ok",2)
+end
+
+-- Headless: hide Head + all Decals on it
+local function applyHeadless(on)
+    getgenv().Headless = on
+    pcall(function()
+        local c = LP.Character; if not c then return end
+        local head = c:FindFirstChild("Head"); if not head then return end
+        head.Transparency = on and 1 or 0
+        for _, d in pairs(head:GetChildren()) do
+            if d:IsA("Decal") then d.Transparency = on and 1 or 0 end
+        end
+    end)
+end
+
+-- Re-apply saved accessories + headless on respawn
+local function reapplySelf(c)
+    if getgenv().Headless then
+        spawn(function() wait(0.1); applyHeadless(true) end)
+    end
+    if #getgenv().SavedAccIDs > 0 then
+        spawn(function()
+            wait(0.6)  -- wait for character to fully load
+            for _, id in ipairs(getgenv().SavedAccIDs) do
+                pcall(function() attachAccessory(c, id) end)
+                wait(0.1)
+            end
+        end)
+    end
+end
+LP.CharacterAdded:Connect(reapplySelf)
 
 -- ══════════════════════════════════════════════════
 --  THEME
@@ -1005,8 +1135,10 @@ grd(TB,Color3.fromRGB(20,14,38),T.Surface,0)
 local ALINE=mk("Frame",{BackgroundColor3=T.Accent,Position=UDim2.new(0,0,1,-2),Size=UDim2.new(1,0,0,2),ZIndex=12,Parent=TB})
 grd(ALINE,T.AccentL,T.AccentD,0)
 local LOGO=mk("Frame",{BackgroundColor3=T.Accent,Position=UDim2.new(0,14,0.5,-14),Size=UDim2.new(0,28,0,28),ZIndex=12,Parent=TB})
-rnd(LOGO,8); grd(LOGO,T.AccentL,T.AccentD,135)
-mk("TextLabel",{BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),Text="D",TextColor3=T.White,TextSize=16,Font=FNB,ZIndex=13,Parent=LOGO})
+rnd(LOGO,8); bdr(LOGO,T.AccentL)
+local LOGO_IMG=mk("ImageLabel",{BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),
+    Image="rbxthumb://type=AvatarHeadShot&id="..LP.UserId.."&w=48&h=48",
+    ZIndex=13,Parent=LOGO}); rnd(LOGO_IMG,8)
 mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,50,0,7),Size=UDim2.new(0,180,0,19),
     Text="Demon Hub",TextColor3=T.Text,TextSize=15,Font=FNB,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=12,Parent=TB})
 mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,50,0,27),Size=UDim2.new(0,180,0,14),
@@ -1096,22 +1228,23 @@ local function switchTab(id)
 end
 
 local TDEFS={
-    {id="Main",   lbl="Main",    ico="▸"},
-    {id="Visual", lbl="Visual",  ico="◈"},
-    {id="World",  lbl="World",   ico="◉"},
-    {id="Player", lbl="Player",  ico="◎"},
-    {id="Combat", lbl="Combat",  ico="⚔"},
-    {id="Settings",lbl="Settings",ico="⊞"},
+    {id="Main",    lbl="Main"},
+    {id="Visual",  lbl="Visual"},
+    {id="World",   lbl="World"},
+    {id="Player",  lbl="Player"},
+    {id="Combat",  lbl="Combat"},
+    {id="Self",    lbl="Self"},
+    {id="Settings",lbl="Settings"},
 }
 
 for i,def in ipairs(TDEFS) do
     local idx=i-1
     local btn=mk("TextButton",{BackgroundColor3=T.Card,BackgroundTransparency=1,
         Size=UDim2.new(1,0,0,BTN_H),Text="",ZIndex=12,Parent=TLIST}); rnd(btn,6)
-    local ico=mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,8,0,0),
-        Size=UDim2.new(0,20,1,0),Text=def.ico,TextColor3=T.Muted,TextSize=13,Font=FN,ZIndex=13,Parent=btn})
-    local lbl=mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,32,0,0),
-        Size=UDim2.new(1,-32,1,0),Text=def.lbl,TextColor3=T.Muted,TextSize=12,Font=FN,
+    local ico=mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,0,0,0),
+        Size=UDim2.new(0,0,1,0),Text="",TextColor3=T.Muted,TextSize=0,Font=FN,ZIndex=13,Parent=btn})
+    local lbl=mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,14,0,0),
+        Size=UDim2.new(1,-14,1,0),Text=def.lbl,TextColor3=T.Muted,TextSize=12,Font=FN,
         TextXAlignment=Enum.TextXAlignment.Left,ZIndex=13,Parent=btn})
     local page=mk("Frame",{BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),Visible=false,ZIndex=12,Parent=CA})
     local scroll=mk("ScrollingFrame",{BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),
@@ -1263,9 +1396,17 @@ local function addDD(parent,name,opts,def,cb)
     local OPH=27; local maxV=math.min(#opts,5)
     local pop=mk("Frame",{BackgroundColor3=Color3.fromRGB(18,18,30),Size=UDim2.new(0,130,0,0),
         ZIndex=95,Visible=false,ClipsDescendants=true,Parent=OVL}); rnd(pop,7); bdr(pop)
-    local plist=mk("Frame",{BackgroundTransparency=1,Size=UDim2.new(1,0,0,0),
-        AutomaticSize=Enum.AutomaticSize.Y,ZIndex=96,Parent=pop})
-    mk("UIListLayout",{Padding=UDim.new(0,2),Parent=plist})
+    -- Use ScrollingFrame so long lists can be scrolled
+    local plist=mk("ScrollingFrame",{
+        BackgroundTransparency=1,BorderSizePixel=0,
+        Size=UDim2.new(1,0,1,0),
+        CanvasSize=UDim2.new(0,0,0,0),
+        AutomaticCanvasSize=Enum.AutomaticSize.Y,
+        ScrollBarThickness=(#opts>5 and 3 or 0),
+        ScrollBarImageColor3=T.Accent,
+        ScrollingDirection=Enum.ScrollingDirection.Y,
+        ZIndex=96,Parent=pop})
+    mk("UIListLayout",{Padding=UDim.new(0,2),SortOrder=Enum.SortOrder.LayoutOrder,Parent=plist})
     do local u=Instance.new("UIPadding"); u.PaddingTop=UDim.new(0,4); u.PaddingBottom=UDim.new(0,4)
        u.PaddingLeft=UDim.new(0,4); u.PaddingRight=UDim.new(0,4); u.Parent=plist end
     local function buildPop()
@@ -1422,8 +1563,6 @@ do
     local s1=sec(sc,"MOVEMENT")
     addSld(s1,"Walk Speed",12,250,12,function(v)
         getgenv().WalkSpeed=v; getgenv().WalkSpeedOverride=true; applyWalkSpeed() end)
-    addSld(s1,"Jump Power",0,500,50,function(v)
-        getgenv().JumpPower=v end)
     local _,_,setFlyUI = addTgl(s1,"Fly","Float in the air with WASD  (F)",false,function(v)
         getgenv().FlyEnabled=v
         if v then enableFly() else disableFly() end end)
@@ -1503,7 +1642,6 @@ do
     local s1=sec(sc,"MOVEMENT")
     addSld(s1,"Walk Speed",12,250,12,function(v)
         getgenv().WalkSpeed=v; getgenv().WalkSpeedOverride=true; applyWalkSpeed() end)
-    addSld(s1,"Jump Power",0,500,50,function(v) getgenv().JumpPower=v end)
 
     -- ── Location teleport ──
     local s2=sec(sc,"TELEPORT — LOCATION")
@@ -1648,6 +1786,107 @@ do
         panic(GUI) end, Color3.fromRGB(180,40,40))
 end
 
+-- ── SELF ───────────────────────────────────────────
+do
+    local sc = Tabs["Self"].scroll
+
+    -- HEADLESS
+    local s1 = sec(sc,"HEADLESS")
+    local _,_,setHLUI = addTgl(s1,"Headless","Head + face become invisible",false,function(v)
+        applyHeadless(v) end)
+    UISync.headless = setHLUI
+
+    -- ACCESSORIES
+    local s2 = sec(sc,"ADD ACCESSORY")
+    local _, _, accIDBox = addInp(s2,"Asset ID","e.g. 1744060292",nil)
+    addBtn(s2,"Add to Character","Attach accessory to your character now",function()
+        local id = tonumber(accIDBox.Text)
+        if not id then notify("Accessory","Enter a valid numeric ID","warn",2); return end
+        local c = LP.Character
+        if not c then notify("Accessory","No character loaded","warn",2); return end
+        spawn(function() attachAccessory(c, id) end)
+    end)
+    addBtn(s2,"Save ID","Remember this ID — auto-reattach on respawn",function()
+        local id = tonumber(accIDBox.Text)
+        if not id then notify("Accessory","Enter a valid numeric ID","warn",2); return end
+        for _, v in ipairs(getgenv().SavedAccIDs) do
+            if v == id then notify("Accessory","ID already saved","info",2); return end
+        end
+        local t = getgenv().SavedAccIDs; t[#t+1] = id
+        notify("Accessory","Saved ID "..id,"ok",2)
+    end)
+    addBtn(s2,"Clear Saved IDs","Remove all auto-apply IDs",function()
+        getgenv().SavedAccIDs = {}
+        notify("Accessory","Saved IDs cleared","info",2)
+    end)
+
+    -- REMOVE ACCESSORIES
+    local s3 = sec(sc,"REMOVE ACCESSORY")
+    local selAcc = nil
+    local accWrap = mk("Frame",{BackgroundTransparency=1,Size=UDim2.new(1,0,0,0),
+        AutomaticSize=Enum.AutomaticSize.Y,Parent=s3})
+
+    local function getAccList()
+        local list = {}
+        local c = LP.Character
+        if c then
+            for _, obj in pairs(c:GetChildren()) do
+                if obj:IsA("Accessory") then
+                    list[#list+1] = obj.Name
+                elseif obj:IsA("BasePart") and obj.Name=="Handle"
+                    and obj:FindFirstChildOfClass("Weld") then
+                    list[#list+1] = "Handle"
+                end
+            end
+        end
+        return #list > 0 and list or {"— none —"}
+    end
+
+    local function rebuildAccDD()
+        for _, ch in pairs(accWrap:GetChildren()) do ch:Destroy() end
+        local names = getAccList()
+        selAcc = names[1]
+        addDD(accWrap,"Accessory",names,names[1],function(v) selAcc=v end)
+    end
+    rebuildAccDD()
+
+    local aRow = row(s3,40)
+    mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,12,0,0),
+        Size=UDim2.new(0.35,0,1,0),Text="Action",TextColor3=T.Muted,TextSize=11,Font=FN,
+        TextXAlignment=Enum.TextXAlignment.Left,ZIndex=17,Parent=aRow})
+    local aRfBtn = mk("TextButton",{AnchorPoint=Vector2.new(1,0.5),BackgroundColor3=T.Surface,
+        Position=UDim2.new(1,-104,0.5,0),Size=UDim2.new(0,44,0,26),
+        Text="Ref",TextColor3=T.Muted,TextSize=11,Font=FNB,ZIndex=18,Parent=aRow})
+    rnd(aRfBtn,5); bdr(aRfBtn)
+    local aRmBtn = mk("TextButton",{AnchorPoint=Vector2.new(1,0.5),BackgroundColor3=T.Red,
+        Position=UDim2.new(1,-56,0.5,0),Size=UDim2.new(0,44,0,26),
+        Text="Del",TextColor3=T.White,TextSize=11,Font=FNB,ZIndex=18,Parent=aRow})
+    rnd(aRmBtn,5)
+
+    aRfBtn.MouseButton1Click:Connect(rebuildAccDD)
+    aRmBtn.MouseButton1Click:Connect(function()
+        if not selAcc or selAcc:sub(1,1)=="—" then
+            notify("Accessory","Nothing selected","warn",2); return
+        end
+        local c = LP.Character
+        if not c then notify("Accessory","No character","warn",2); return end
+        local removed = false
+        for _, obj in pairs(c:GetChildren()) do
+            if obj:IsA("Accessory") and obj.Name==selAcc then
+                obj:Destroy(); removed=true; break
+            elseif obj:IsA("BasePart") and obj.Name=="Handle" and selAcc=="Handle"
+                and obj:FindFirstChildOfClass("Weld") then
+                obj:Destroy(); removed=true; break
+            end
+        end
+        if removed then
+            notify("Accessory","Removed: "..selAcc,"ok",2); rebuildAccDD()
+        else
+            notify("Accessory","Not found: "..selAcc,"err",2)
+        end
+    end)
+end
+
 -- ── SETTINGS ───────────────────────────────────────
 do
     local sc=Tabs["Settings"].scroll
@@ -1661,6 +1900,9 @@ do
     addKey(sk,"Hub Toggle",Enum.KeyCode.M,"hub",
         function(k) KBLBL.Text=k.Name.."  to toggle" end,
         function()  KBLBL.Text="—  to toggle" end)
+    addKey(sk,"Panic",nil,"panic",function(k)
+        kbBind("panic",k,function() panic(GUI) end)
+    end, function() kbClear("panic") end)
     addKey(sk,"Fly",Enum.KeyCode.F,"fly",nil)
     addKey(sk,"Teleport",Enum.KeyCode.T,"tp",nil)
     addKey(sk,"Always Crit",nil,"crit",function(k)
