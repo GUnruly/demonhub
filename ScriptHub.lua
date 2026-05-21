@@ -158,6 +158,8 @@ end)
 -- ══════════════════════════════════════════════════
 --  MOVEMENT LOGIC
 -- ══════════════════════════════════════════════════
+local wsOrig = nil   -- captured original WalkSpeed before our override
+
 local function applyWalkSpeed()
     pcall(function()
         local c = LP.Character
@@ -166,6 +168,27 @@ local function applyWalkSpeed()
             if h then h.WalkSpeed = getgenv().WalkSpeed end
         end
     end)
+end
+
+local function enableWalkSpeedOverride(spd)
+    pcall(function()
+        local c = LP.Character
+        local h = c and c:FindFirstChild("Humanoid")
+        if h and not wsOrig then wsOrig = h.WalkSpeed end   -- capture once
+    end)
+    if spd then getgenv().WalkSpeed = spd end
+    getgenv().WalkSpeedOverride = true
+    applyWalkSpeed()
+end
+
+local function disableWalkSpeedOverride()
+    getgenv().WalkSpeedOverride = false
+    pcall(function()
+        local c = LP.Character
+        local h = c and c:FindFirstChild("Humanoid")
+        if h then h.WalkSpeed = wsOrig or 16 end
+    end)
+    wsOrig = nil   -- allow re-capture next enable
 end
 LP.CharacterAdded:Connect(function(c)
     local h = c:WaitForChild("Humanoid", 5)
@@ -306,7 +329,8 @@ RunService.Heartbeat:Connect(function()
                         end
                         local sz = getgenv().CritSize
                         pcall(function()
-                            torso.Size         = Vector3.new(sz, sz * 0.5, sz)
+                            -- Y kept at 0.2 so the enlarged hitbox can't be physically climbed
+                            torso.Size         = Vector3.new(sz, 0.2, sz)
                             torso.Transparency = getgenv().CritTransparency
                             torso.CanCollide   = false
                             torso.Massless     = true
@@ -376,11 +400,12 @@ local function applyHitbox()
     end
 end
 
-local function hbAddPlr(plr)   if plr then hbWL[plr]=true;  pcall(applyHitbox) end end
+local function hbAddPlr(plr)   if plr then hbWL[plr]=true end end
 local function hbRemPlr(plr)
     if not plr then return end
     hbWL[plr] = nil
     local og = hbOrig[plr]
+    hbOrig[plr] = nil   -- clear saved original so re-enable captures fresh values
     if og and plr.Character then
         local r = plr.Character:FindFirstChild("HumanoidRootPart")
         if r then
@@ -388,7 +413,6 @@ local function hbRemPlr(plr)
             r.CanCollide=og.CanCollide; r.CanTouch=og.CanTouch; r.CanQuery=og.CanQuery
         end
     end
-    pcall(applyHitbox)
 end
 
 local function evalHbPlr(plr)
@@ -612,34 +636,102 @@ local function disableFastment()
 end
 
 -- ══════════════════════════════════════════════════
---  CLICK TELEPORT (equip tool → click to TP to mouse)
+--  ANTI-FLING  — clamp HRP velocity so no script can fling us
 -- ══════════════════════════════════════════════════
-local ctpTool = nil
-disableClickTP = function()
-    getgenv().ClickTPEnabled = false
-    if ctpTool then pcall(function() ctpTool:Destroy() end); ctpTool = nil end
-end
-local function enableClickTP()
-    disableClickTP()  -- clean up any previous tool
-    getgenv().ClickTPEnabled = true
-    local tool = Instance.new("Tool")
-    tool.Name           = "_DH_ClickTP"
-    tool.RequiresHandle = false
-    tool.CanBeDropped   = false
-    tool.ToolTip        = "Click to Teleport"
-    ctpTool = tool
-    tool.Activated:Connect(function()
-        if not getgenv().ClickTPEnabled then disableClickTP(); return end
-        local mouse = LP:GetMouse()
-        local c     = LP.Character
-        local hrp   = c and c:FindFirstChild("HumanoidRootPart")
-        if hrp and mouse.Hit then
-            pcall(function()
-                hrp.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3.5, 0))
-            end)
-        end
+local antiFlingConn = nil
+local AF_MAX_VEL = 80   -- studs/s threshold above which we clamp
+
+local function enableAntiFling()
+    if antiFlingConn then return end
+    antiFlingConn = RunService.Heartbeat:Connect(function()
+        pcall(function()
+            local c = LP.Character
+            local hrp = c and c:FindFirstChild("HumanoidRootPart")
+            if not hrp then return end
+            local lv = hrp.AssemblyLinearVelocity
+            if lv.Magnitude > AF_MAX_VEL then
+                hrp.AssemblyLinearVelocity = lv.Unit * AF_MAX_VEL
+            end
+            local av = hrp.AssemblyAngularVelocity
+            if av.Magnitude > 6 then
+                hrp.AssemblyAngularVelocity = Vector3.new(0,0,0)
+            end
+        end)
     end)
-    tool.Parent = LP.Backpack
+end
+
+local function disableAntiFling()
+    if antiFlingConn then antiFlingConn:Disconnect(); antiFlingConn = nil end
+end
+
+-- ══════════════════════════════════════════════════
+--  FLING — on-touch fling nearby enemies
+-- ══════════════════════════════════════════════════
+local flingConn = nil
+
+local function enableFling()
+    if flingConn then return end
+    flingConn = RunService.Heartbeat:Connect(function()
+        pcall(function()
+            local c = LP.Character
+            local hrp = c and c:FindFirstChild("HumanoidRootPart")
+            if not hrp then return end
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= LP then
+                    local pc = p.Character
+                    local phrp = pc and pc:FindFirstChild("HumanoidRootPart")
+                    if phrp then
+                        local dist = (hrp.Position - phrp.Position).Magnitude
+                        if dist < 5 then
+                            -- Check not already in void (Y < -50) to avoid re-flinging
+                            if phrp.Position.Y > -30 then
+                                local dir = (phrp.Position - hrp.Position)
+                                local fDir = dir.Magnitude > 0 and dir.Unit or Vector3.new(0,1,0)
+                                phrp.AssemblyLinearVelocity =
+                                    fDir * 600 + Vector3.new(0, 300, 0)
+                                pcall(function()
+                                    local ph = pc:FindFirstChildOfClass("Humanoid")
+                                    if ph then ph.PlatformStand = true end
+                                end)
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end)
+end
+
+local function disableFling()
+    if flingConn then flingConn:Disconnect(); flingConn = nil end
+end
+
+-- ══════════════════════════════════════════════════
+--  FOLLOW BOT  — stay behind a target player
+-- ══════════════════════════════════════════════════
+local followConn   = nil
+local followTarget = nil
+local followDist   = 5   -- studs behind target (slider controls this)
+
+local function enableFollowbot()
+    if followConn then return end
+    followConn = RunService.Heartbeat:Connect(function()
+        pcall(function()
+            if not followTarget then return end
+            local tgt = Players:FindFirstChild(followTarget)
+            local tc  = tgt and tgt.Character
+            local thrp = tc and tc:FindFirstChild("HumanoidRootPart")
+            local c   = LP.Character
+            local hrp  = c and c:FindFirstChild("HumanoidRootPart")
+            if not (thrp and hrp) then return end
+            local behind = thrp.CFrame * CFrame.new(0, 0, followDist)
+            hrp.CFrame = behind
+        end)
+    end)
+end
+
+local function disableFollowbot()
+    if followConn then followConn:Disconnect(); followConn = nil end
 end
 
 -- ══════════════════════════════════════════════════
@@ -738,8 +830,10 @@ local function panic(gui)
     if disableFPSBoost   then disableFPSBoost()   end
     if applyHeadless     then applyHeadless(false) end
     if disableClickTP    then disableClickTP()     end
-    getgenv().WalkSpeed = 12; getgenv().WalkSpeedOverride = false; applyWalkSpeed()
-    for p,_ in pairs(hbWL) do hbRemPlr(p) end
+    disableAntiFling(); disableFling(); disableFollowbot()
+    disableWalkSpeedOverride()
+    local toRem={}; for p,_ in pairs(hbWL) do toRem[#toRem+1]=p end
+    for _,p in ipairs(toRem) do hbRemPlr(p) end; hbWL={}; hbOrig={}
     if gui then gui:Destroy() end
 end
 
@@ -963,6 +1057,8 @@ local function enableFPSBoost()
     if fpsBoosted then return end; fpsBoosted = true
     local RS = game:GetService("ReplicatedStorage")
     local stash = Instance.new("Folder"); stash.Name="_DH_FPS"; stash.Parent=RS
+
+    -- 1. Move all textures/decals out of workspace
     for _, obj in pairs(workspace:GetDescendants()) do
         if obj:IsA("Texture") or obj:IsA("Decal") then
             pcall(function()
@@ -976,19 +1072,53 @@ local function enableFPSBoost()
             end)
         end
     end
+
+    -- 2. Disable particle emitters, trails, beams
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam")
+        or obj:IsA("SelectionBox") then
+            pcall(function()
+                fpsStash[#fpsStash+1]={obj=obj,kind="fx",val=obj.Enabled}
+                obj.Enabled=false
+            end)
+        end
+    end
+
+    -- 3. Disable global shadows + heavy lighting effects
+    pcall(function()
+        fpsStash[#fpsStash+1]={kind="gs",val=Lighting.GlobalShadows}
+        Lighting.GlobalShadows=false
+    end)
+    for _, e in pairs(Lighting:GetChildren()) do
+        if e:IsA("BlurEffect") or e:IsA("DepthOfFieldEffect")
+        or e:IsA("SunRaysEffect") or e:IsA("BloomEffect") then
+            pcall(function()
+                fpsStash[#fpsStash+1]={kind="fx",obj=e,val=e.Enabled}
+                e.Enabled=false
+            end)
+        end
+    end
+
+    -- 4. Lower render quality (Roblox QualityLevel 1 = lowest)
+    pcall(function()
+        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
+    end)
 end
 
 disableFPSBoost = function()
     if not fpsBoosted then return end; fpsBoosted = false
     for _, e in pairs(fpsStash) do
         pcall(function()
-            if e.kind=="td"  then e.obj.Parent   = e.parent end
-            if e.kind=="mat" then e.obj.Material  = e.mat    end
+            if e.kind=="td"  then e.obj.Parent  = e.parent end
+            if e.kind=="mat" then e.obj.Material = e.mat    end
+            if e.kind=="fx"  then e.obj.Enabled  = e.val    end
+            if e.kind=="gs"  then Lighting.GlobalShadows = e.val end
         end)
     end
     fpsStash = {}
     local RS = game:GetService("ReplicatedStorage")
     local stash = RS:FindFirstChild("_DH_FPS"); if stash then stash:Destroy() end
+    pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic end)
 end
 
 -- ══════════════════════════════════════════════════
@@ -1141,8 +1271,10 @@ local function notify(title,msg,kind,dur)
     mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,42,0,29),
         Size=UDim2.new(1,-52,0,28),Text=msg or "",TextColor3=T.Muted,TextSize=11,Font=FN,
         TextXAlignment=Enum.TextXAlignment.Left,TextWrapped=true,ZIndex=92,Parent=card})
-    local prog=mk("Frame",{BackgroundColor3=n[1],BackgroundTransparency=0.45,
-        Position=UDim2.new(0,0,1,-3),Size=UDim2.new(1,0,0,3),ZIndex=93,Parent=card})
+    -- inset 4px each side so bar stays inside rounded card corners
+    local prog=mk("Frame",{BackgroundColor3=n[1],BackgroundTransparency=0.35,
+        Position=UDim2.new(0,4,1,-4),Size=UDim2.new(1,-8,0,3),ZIndex=93,Parent=card})
+    rnd(prog,2)
     tw(card,{Position=UDim2.new(0,0,0,0)},S,Enum.EasingStyle.Back,Enum.EasingDirection.Out)
     tw(prog,{Size=UDim2.new(0,0,0,3)},dur-0.25,Enum.EasingStyle.Linear)
     spawn(function() wait(dur); tw(card,{Position=UDim2.new(1,30,0,0)},S)
@@ -1248,10 +1380,11 @@ grd(SB,T.Surface,Color3.fromRGB(13,13,22),90)
 mk("Frame",{BackgroundColor3=T.Border,AnchorPoint=Vector2.new(1,0),Position=UDim2.new(1,0,0,0),
     Size=UDim2.new(0,1,1,0),ZIndex=12,Parent=SB})
 local IND=mk("Frame",{BackgroundColor3=T.Accent,Size=UDim2.new(0,3,0,28),Position=UDim2.new(0,0,0,18),ZIndex=14,Parent=SB}); rnd(IND,2)
-local TLIST=mk("Frame",{BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),ZIndex=12,Parent=SB})
-do local u=Instance.new("UIPadding"); u.PaddingTop=UDim.new(0,10); u.PaddingBottom=UDim.new(0,10)
+-- Leave bottom 38px for Creator button
+local TLIST=mk("Frame",{BackgroundTransparency=1,Size=UDim2.new(1,0,1,-38),ZIndex=12,Parent=SB})
+do local u=Instance.new("UIPadding"); u.PaddingTop=UDim.new(0,PAD_T); u.PaddingBottom=UDim.new(0,4)
    u.PaddingLeft=UDim.new(0,9); u.PaddingRight=UDim.new(0,9); u.Parent=TLIST end
-mk("UIListLayout",{FillDirection=Enum.FillDirection.Vertical,Padding=UDim.new(0,3),Parent=TLIST})
+mk("UIListLayout",{FillDirection=Enum.FillDirection.Vertical,Padding=UDim.new(0,BTN_G),Parent=TLIST})
 
 -- ── Content ────────────────────────────────────────
 local CA=mk("Frame",{BackgroundTransparency=1,Position=UDim2.new(0,152,0,50),Size=UDim2.new(0,448,0,368),ZIndex=11,Parent=WIN})
@@ -1260,13 +1393,30 @@ local credPage  -- forward-declared; built after tab loop
 -- ── Status bar ─────────────────────────────────────
 local STAT=mk("Frame",{BackgroundColor3=T.StatBG,Position=UDim2.new(0,0,0,418),Size=UDim2.new(1,0,0,32),ZIndex=12,Parent=WIN})
 mk("Frame",{BackgroundColor3=T.Border,Size=UDim2.new(1,0,0,1),ZIndex=13,Parent=STAT})
-local FPS_LBL=mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,12,0,0),Size=UDim2.new(0,72,1,0),
+local FPS_LBL=mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,12,0,0),Size=UDim2.new(0,64,1,0),
     Text="FPS: --",TextColor3=T.Muted,TextSize=10,Font=FN,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=13,Parent=STAT})
-local ACT_LBL=mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,88,0,0),Size=UDim2.new(0,130,1,0),
+local ACT_LBL=mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,80,0,0),Size=UDim2.new(0,120,1,0),
     Text="○  0 active",TextColor3=T.Muted,TextSize=10,Font=FN,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=13,Parent=STAT})
-local KBLBL=mk("TextLabel",{BackgroundTransparency=1,AnchorPoint=Vector2.new(1,0.5),Position=UDim2.new(1,-12,0.5,0),
-    Size=UDim2.new(0,100,1,0),Text="M  to toggle",TextColor3=T.Muted,TextSize=10,Font=FN,
+local KBLBL=mk("TextLabel",{BackgroundTransparency=1,AnchorPoint=Vector2.new(1,0.5),Position=UDim2.new(1,-88,0.5,0),
+    Size=UDim2.new(0,90,1,0),Text="M  to toggle",TextColor3=T.Muted,TextSize=10,Font=FN,
     TextXAlignment=Enum.TextXAlignment.Right,ZIndex=13,Parent=STAT})
+-- Panic button in footer (right edge)
+local PANIC_BTN=mk("TextButton",{AnchorPoint=Vector2.new(1,0.5),
+    BackgroundColor3=Color3.fromRGB(140,30,30),
+    Position=UDim2.new(1,-10,0.5,0),Size=UDim2.new(0,70,0,22),
+    Text="Panic",TextColor3=T.White,TextSize=11,Font=FNB,ZIndex=14,Parent=STAT})
+rnd(PANIC_BTN,5)
+local PANIC_TIP=mk("TextLabel",{BackgroundTransparency=1,AnchorPoint=Vector2.new(1,1),
+    Position=UDim2.new(1,-10,0,-4),Size=UDim2.new(0,240,0,14),
+    Text="Resets all hacks & destroys hub",TextColor3=T.Muted,TextSize=9,Font=FN,
+    TextXAlignment=Enum.TextXAlignment.Right,ZIndex=14,Visible=false,Parent=STAT})
+PANIC_BTN.MouseEnter:Connect(function()
+    tw(PANIC_BTN,{BackgroundColor3=Color3.fromRGB(200,50,50)},SF)
+    PANIC_TIP.Visible=true end)
+PANIC_BTN.MouseLeave:Connect(function()
+    tw(PANIC_BTN,{BackgroundColor3=Color3.fromRGB(140,30,30)},SF)
+    PANIC_TIP.Visible=false end)
+PANIC_BTN.MouseButton1Click:Connect(function() panic(GUI) end)
 do local buf={}
     RunService.Heartbeat:Connect(function(dt)
         buf[#buf+1]=1/dt; if #buf>30 then table.remove(buf,1) end
@@ -1283,9 +1433,9 @@ local function setActive(d)
 end
 
 -- ══════════════════════════════════════════════════
---  TABS  (6 tabs)
+--  TABS  (10 tabs)
 -- ══════════════════════════════════════════════════
-local BTN_H=36; local BTN_G=3; local PAD_T=10; local IND_H=28
+local BTN_H=30; local BTN_G=2; local PAD_T=6; local IND_H=22
 local function indY(idx) return PAD_T+idx*(BTN_H+BTN_G)+(BTN_H-IND_H)/2 end
 local Tabs={}; local CurTab=nil
 
@@ -1309,13 +1459,16 @@ local function switchTab(id)
 end
 
 local TDEFS={
-    {id="Main",    lbl="Main"},
-    {id="Visual",  lbl="Visual"},
-    {id="World",   lbl="World"},
-    {id="Player",  lbl="Player"},
-    {id="Combat",  lbl="Combat"},
-    {id="Self",    lbl="Self"},
-    {id="Settings",lbl="Settings"},
+    {id="Main",     lbl="Main"},
+    {id="Combat",   lbl="Combat"},
+    {id="Visual",   lbl="Visual"},
+    {id="Player",   lbl="Player"},
+    {id="Server",   lbl="Server"},
+    {id="Farm",     lbl="Farm"},
+    {id="World",    lbl="World"},
+    {id="Self",     lbl="Self"},
+    {id="Keybinds", lbl="Keybinds"},
+    {id="Settings", lbl="Settings"},
 }
 
 for i,def in ipairs(TDEFS) do
@@ -1642,12 +1795,14 @@ end
 do
     local sc=Tabs["Main"].scroll
     local s1=sec(sc,"MOVEMENT")
-    addSld(s1,"Walk Speed",12,250,12,function(v)
-        getgenv().WalkSpeed=v; getgenv().WalkSpeedOverride=true; applyWalkSpeed() end)
+    addSld(s1,"Walk Speed",12,250,16,function(v)
+        getgenv().WalkSpeed=v
+        if getgenv().WalkSpeedOverride then applyWalkSpeed() end end)
     local _,_,setFlyUI = addTgl(s1,"Fly","Float in the air with WASD  (F)",false,function(v)
         getgenv().FlyEnabled=v
         if v then enableFly() else disableFly() end end)
     UISync.fly = setFlyUI
+    addSld(s1,"Fly Speed",10,200,46,function(v) FLY_SPD=v end)
     local _,_,setNcUI = addTgl(s1,"Noclip","Phase through walls",false,function(v)
         getgenv().NoclipEnabled=v end)
     UISync.noclip = setNcUI
@@ -1686,9 +1841,6 @@ do
         applyFullbright(v) end)
     addTgl(s2,"No Fog","Clear map fog",false,function(v) applyNoFog(v) end)
     addSld(s2,"Stretch (4:3)",0,100,0,function(v) applyStretch(v) end)
-    local s3=sec(sc,"PERFORMANCE")
-    addTgl(s3,"FPS Boost","Moves all textures into ReplicatedStorage",false,function(v)
-        if v then enableFPSBoost() else disableFPSBoost() end end)
 end
 
 -- ── WORLD ──────────────────────────────────────────
@@ -1702,7 +1854,6 @@ do
     addSld(s2,"Time of Day",0,24,12,function(v)
         pcall(function() Lighting.ClockTime=v end) end)
     addTgl(s2,"Lock Time","Freeze time at current value",false,function(v)
-        -- lock: RunService loop to hold ClockTime
         if v then
             local t=Lighting.ClockTime
             RunService.Heartbeat:Connect(function()
@@ -1711,51 +1862,71 @@ do
             end)
         end
     end)
+    local s3=sec(sc,"PERFORMANCE")
+    addTgl(s3,"FPS Boost","Removes textures, particles, shadows + lowers quality",false,function(v)
+        if v then enableFPSBoost() else disableFPSBoost() end end)
 end
 
 -- ── PLAYER ─────────────────────────────────────────
--- User-defined locations: add entries like {"Name", CFrame.new(x,y,z)}
 local LOCATIONS = {
-    -- {"Spawn", CFrame.new(0,5,0)},
+    {"Gym",       CFrame.new(-191.3, 4.6,  -6.5)},
+    {"Roof",      CFrame.new(-216.2, 41.6, -1.2)},
+    {"Outside",   CFrame.new(-199,   6.8,  -154.9)},
+    {"Pvp zone",  CFrame.new(-101.4, 4.6,  -33.5)},
+    {"Libary",    CFrame.new(-121.6, 4.6,  171.2)},
+    {"Cafetaria", CFrame.new(-345,   4.6,  121.2)},
 }
 do
     local sc=Tabs["Player"].scroll
+
+    -- ── Movement ──
     local s1=sec(sc,"MOVEMENT")
-    addSld(s1,"Walk Speed",12,250,12,function(v)
-        getgenv().WalkSpeed=v; getgenv().WalkSpeedOverride=true; applyWalkSpeed() end)
-    local _,_,setCtpUI = addTgl(s1,"Click Teleport",
-        "Equip tool, then click anywhere to teleport",false,function(v)
+    -- Walk Speed toggle + slider
+    local wsSliderRow, wsGetV
+    local _,_,setWsUI = addTgl(s1,"Walk Speed Override","Enforce custom walk speed",false,function(v)
+        if v then enableWalkSpeedOverride() else disableWalkSpeedOverride() end end)
+    UISync.ws = setWsUI
+    addSld(s1,"Walk Speed",12,250,16,function(v)
+        getgenv().WalkSpeed=v
+        if getgenv().WalkSpeedOverride then applyWalkSpeed() end end)
+
+    -- ── Utilities ──
+    local s2=sec(sc,"UTILITIES")
+    local _,_,setAfUI = addTgl(s2,"Anti-Fling","Prevent any script from flinging you",false,function(v)
+        if v then enableAntiFling() else disableAntiFling() end end)
+    UISync.antifling = setAfUI
+    local _,_,setFlUI = addTgl(s2,"Fling","Touch players to fling them",false,function(v)
+        if v then enableFling() else disableFling() end end)
+    UISync.fling = setFlUI
+    addTgl(s2,"Click Teleport","Equip tool then click anywhere to TP",false,function(v)
         getgenv().ClickTPEnabled=v
         if v then enableClickTP() else disableClickTP() end end)
-    UISync.clicktp = setCtpUI
 
     -- ── Location teleport ──
-    local s2=sec(sc,"TELEPORT — LOCATION")
+    local s3=sec(sc,"TELEPORT — LOCATION")
     local locNames=(function()
-        local t={}; for _,l in ipairs(LOCATIONS) do t[#t+1]=l[1] end
-        return #t>0 and t or {"— add in code —"}
+        local t={}; for _,l in ipairs(LOCATIONS) do t[#t+1]=l[1] end; return t
     end)()
     local selLoc=locNames[1]
-    addDD(s2,"Location",locNames,locNames[1],function(v) selLoc=v end)
-    addBtn(s2,"Go to Location","Teleport to selected location",function()
+    addDD(s3,"Location",locNames,locNames[1],function(v) selLoc=v end)
+    addBtn(s3,"Go to Location","Teleport to selected location",function()
         for _,loc in ipairs(LOCATIONS) do
             if loc[1]==selLoc then
                 pcall(function()
                     local h=LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
                     if h then h.CFrame=loc[2] end
                 end)
-                notify("Teleport","Go: "..selLoc,"ok",2); return
+                notify("Teleport","→ "..selLoc,"ok",2); return
             end
         end
-        notify("Teleport","No locations added yet","warn",2)
+        notify("Teleport","Location not found","warn",2)
     end)
 
     -- ── Player teleport ──
-    local s3=sec(sc,"TELEPORT — PLAYER")
+    local s4=sec(sc,"TELEPORT — PLAYER")
     local selPlayer="—"
-    -- Wrapper frame so we can rebuild the dropdown without ruining layout
     local pWrap=mk("Frame",{BackgroundTransparency=1,Size=UDim2.new(1,0,0,0),
-        AutomaticSize=Enum.AutomaticSize.Y,Parent=s3})
+        AutomaticSize=Enum.AutomaticSize.Y,Parent=s4})
     local function rebuildPlayerDD()
         for _,c in pairs(pWrap:GetChildren()) do c:Destroy() end
         local names={}
@@ -1765,8 +1936,7 @@ do
         addDD(pWrap,"Player",names,names[1],function(v) selPlayer=v end)
     end
     rebuildPlayerDD()
-    -- Refresh + Teleport row
-    local pRow=row(s3,40)
+    local pRow=row(s4,40)
     mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,12,0,0),
         Size=UDim2.new(0.35,0,1,0),Text="Action",TextColor3=T.Muted,TextSize=11,Font=FN,
         TextXAlignment=Enum.TextXAlignment.Left,ZIndex=17,Parent=pRow})
@@ -1786,15 +1956,168 @@ do
         local mh=LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
         if th and mh then
             pcall(function() mh.CFrame=th.CFrame+Vector3.new(2,0,0) end)
-            notify("Teleport","Go: "..selPlayer,"ok",2)
+            notify("Teleport","→ "..selPlayer,"ok",2)
         else notify("Teleport",selPlayer.." not found","err",2) end
     end)
+end
 
-    -- ── Click Teleport ──
-    local s4=sec(sc,"CLICK TELEPORT")
-    addTgl(s4,"Click Teleport","Equip tool then click anywhere to TP",false,function(v)
-        if v then enableClickTP() else disableClickTP() end end)
+-- ── SERVER ─────────────────────────────────────────
+do
+    local sc = Tabs["Server"].scroll
+    -- Split layout: player list (left) + action panel (right)
+    local splitH = 280
+    local splitRow = mk("Frame",{BackgroundColor3=T.Card,Size=UDim2.new(1,0,0,splitH),
+        ZIndex=13,Parent=sc}); rnd(splitRow,8); bdr(splitRow,T.Border)
 
+    -- Left: player list
+    local leftW = 130
+    local leftPanel = mk("Frame",{BackgroundColor3=T.Surface,Size=UDim2.new(0,leftW,1,0),
+        ZIndex=14,ClipsDescendants=true,Parent=splitRow}); rnd(leftPanel,8)
+    mk("Frame",{BackgroundColor3=T.Border,Position=UDim2.new(0,leftW-1,0,0),
+        Size=UDim2.new(0,1,1,0),ZIndex=15,Parent=splitRow})
+
+    local plrList = mk("ScrollingFrame",{BackgroundTransparency=1,
+        Size=UDim2.new(1,0,1,0),CanvasSize=UDim2.new(0,0,0,0),
+        AutomaticCanvasSize=Enum.AutomaticSize.Y,ScrollBarThickness=3,
+        ScrollBarImageColor3=T.Accent,ZIndex=15,Parent=leftPanel})
+    do local u=Instance.new("UIPadding"); u.PaddingTop=UDim.new(0,6); u.PaddingBottom=UDim.new(0,6)
+       u.PaddingLeft=UDim.new(0,6); u.PaddingRight=UDim.new(0,6); u.Parent=plrList end
+    mk("UIListLayout",{Padding=UDim.new(0,3),SortOrder=Enum.SortOrder.LayoutOrder,Parent=plrList})
+
+    local selectedServerPlr = nil
+    local plrBtns = {}
+
+    local function rebuildServerList()
+        for _,c in pairs(plrList:GetChildren()) do
+            if c:IsA("TextButton") then c:Destroy() end
+        end
+        plrBtns = {}
+        for _,p in ipairs(Players:GetPlayers()) do
+            if p ~= LP then
+                local pb = mk("TextButton",{
+                    BackgroundColor3 = (selectedServerPlr==p.Name) and Color3.fromRGB(28,18,52) or T.BG,
+                    BackgroundTransparency = (selectedServerPlr==p.Name) and 0 or 0.4,
+                    Size=UDim2.new(1,0,0,28),Text=p.Name,TextColor3=T.Text,TextSize=11,Font=FN,
+                    ZIndex=16,Parent=plrList}); rnd(pb,5)
+                pb.MouseButton1Click:Connect(function()
+                    selectedServerPlr = p.Name
+                    for _,b in pairs(plrBtns) do
+                        local isSel = (b[1]==p.Name)
+                        tw(b[2],{BackgroundColor3=isSel and Color3.fromRGB(28,18,52) or T.BG,
+                            BackgroundTransparency=isSel and 0 or 0.4},SF)
+                    end
+                end)
+                plrBtns[#plrBtns+1] = {p.Name, pb}
+            end
+        end
+        if #plrBtns==0 then
+            mk("TextLabel",{BackgroundTransparency=1,Size=UDim2.new(1,0,0,28),
+                Text="— empty —",TextColor3=T.Muted,TextSize=10,Font=FN,ZIndex=16,Parent=plrList})
+        end
+    end
+    rebuildServerList()
+
+    -- Right: action panel
+    local rightX = leftW + 1
+    local rightW = 448 - 24 - rightX   -- content width minus padding
+    local rightPanel = mk("Frame",{BackgroundTransparency=1,
+        Position=UDim2.new(0,rightX,0,0),Size=UDim2.new(1,-rightX,1,0),
+        ZIndex=14,Parent=splitRow})
+    do local u=Instance.new("UIPadding"); u.PaddingTop=UDim.new(0,8); u.PaddingLeft=UDim.new(0,8)
+       u.PaddingRight=UDim.new(0,8); u.PaddingBottom=UDim.new(0,8); u.Parent=rightPanel end
+    mk("UIListLayout",{Padding=UDim.new(0,6),SortOrder=Enum.SortOrder.LayoutOrder,Parent=rightPanel})
+
+    local function getSrvTarget()
+        if not selectedServerPlr then notify("Server","Select a player first","warn",2); return nil end
+        local p = Players:FindFirstChild(selectedServerPlr)
+        if not p then notify("Server","Player left","warn",2); rebuildServerList(); return nil end
+        return p
+    end
+
+    -- Refresh button
+    local rfRow = mk("TextButton",{BackgroundColor3=T.Surface,
+        Size=UDim2.new(1,0,0,28),Text="⟳  Refresh List",TextColor3=T.Muted,
+        TextSize=11,Font=FN,ZIndex=16,Parent=rightPanel})
+    rnd(rfRow,5); bdr(rfRow)
+    rfRow.MouseButton1Click:Connect(function() rebuildServerList()
+        notify("Server","List refreshed","info",1.5) end)
+
+    -- Bring
+    local bringBtn = mk("TextButton",{BackgroundColor3=T.Accent,
+        Size=UDim2.new(1,0,0,28),Text="Bring",TextColor3=T.White,
+        TextSize=11,Font=FNB,ZIndex=16,Parent=rightPanel})
+    rnd(bringBtn,5); grd(bringBtn,T.AccentL,T.AccentD,90)
+    bringBtn.MouseButton1Click:Connect(function()
+        local p = getSrvTarget(); if not p then return end
+        local thrp = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+        local mhrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+        if thrp and mhrp then
+            pcall(function() thrp.CFrame = mhrp.CFrame * CFrame.new(2,0,0) end)
+            notify("Bring",p.Name.." brought","ok",2)
+        else notify("Bring","Character not found","err",2) end
+    end)
+
+    -- Fling (server action)
+    local srvFlingBtn = mk("TextButton",{BackgroundColor3=Color3.fromRGB(160,40,40),
+        Size=UDim2.new(1,0,0,28),Text="Fling",TextColor3=T.White,
+        TextSize=11,Font=FNB,ZIndex=16,Parent=rightPanel})
+    rnd(srvFlingBtn,5)
+    srvFlingBtn.MouseButton1Click:Connect(function()
+        local p = getSrvTarget(); if not p then return end
+        local thrp = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+        if not thrp then notify("Fling","Target has no HRP","err",2); return end
+        -- Teleport next to them then apply massive velocity
+        local mhrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+        if mhrp then
+            pcall(function() mhrp.CFrame = thrp.CFrame * CFrame.new(3,0,0) end)
+            wait(0.05)
+        end
+        local fDir = Vector3.new(math.random(-1,1),0,math.random(-1,1))
+        if fDir.Magnitude < 0.1 then fDir = Vector3.new(1,0,0) end
+        fDir = fDir.Unit
+        pcall(function()
+            thrp.AssemblyLinearVelocity = fDir*900 + Vector3.new(0,350,0)
+            local ph = p.Character:FindFirstChildOfClass("Humanoid")
+            if ph then ph.PlatformStand=true end
+        end)
+        notify("Fling","Flung "..p.Name,"ok",2)
+    end)
+
+    -- Followbot toggle + distance slider
+    local fbActive = false
+    local fbToggle = mk("TextButton",{BackgroundColor3=T.Surface,
+        Size=UDim2.new(1,0,0,28),Text="Followbot: OFF",TextColor3=T.Muted,
+        TextSize=11,Font=FN,ZIndex=16,Parent=rightPanel})
+    rnd(fbToggle,5); bdr(fbToggle)
+    fbToggle.MouseButton1Click:Connect(function()
+        fbActive = not fbActive
+        local p = fbActive and getSrvTarget()
+        if fbActive and not p then fbActive=false; return end
+        if fbActive then
+            followTarget = selectedServerPlr
+            enableFollowbot()
+            fbToggle.Text="Followbot: ON"; fbToggle.TextColor3=T.AccentL
+            tw(fbToggle,{BackgroundColor3=Color3.fromRGB(22,14,42)},SF)
+        else
+            disableFollowbot(); followTarget=nil
+            fbToggle.Text="Followbot: OFF"; fbToggle.TextColor3=T.Muted
+            tw(fbToggle,{BackgroundColor3=T.Surface},SF)
+        end
+    end)
+
+    -- Distance slider (1=inside target, 20=far)
+    mk("TextLabel",{BackgroundTransparency=1,Size=UDim2.new(1,0,0,14),
+        Text="Follow Distance",TextColor3=T.Muted,TextSize=10,Font=FN,
+        TextXAlignment=Enum.TextXAlignment.Left,ZIndex=16,Parent=rightPanel})
+    addSld(rightPanel,"",1,20,5,function(v) followDist=v end)
+end
+
+-- ── FARM ─────────────────────────────────────────
+do
+    local sc = Tabs["Farm"].scroll
+    local s1 = sec(sc,"AUTO FARM")
+    addBtn(s1,"Coming Soon","Farm features will be added here",function()
+        notify("Farm","No farm scripts yet","info",2) end, T.Muted)
 end
 
 -- ── COMBAT ─────────────────────────────────────────
@@ -1803,7 +2126,15 @@ do
     local s1=sec(sc,"HITBOX")
     local _,_,setHboxUI=addTgl(s1,"Enable Hitbox","Expand HRP hitbox for enemies",false,function(v)
         getgenv().HitboxEnabled=v
-        if v then pcall(applyHitbox) else for p,_ in pairs(hbWL) do hbRemPlr(p) end end end)
+        if v then
+            -- re-evaluate every player so hbWL gets fully repopulated
+            for _,p in ipairs(Players:GetPlayers()) do if p~=LP then evalHbPlr(p) end end
+            pcall(applyHitbox)
+        else
+            local toRem={}; for p,_ in pairs(hbWL) do toRem[#toRem+1]=p end
+            for _,p in ipairs(toRem) do hbRemPlr(p) end
+            hbWL={}; hbOrig={}   -- full reset
+        end end)
     UISync.hbox=setHboxUI
     addSld(s1,"HRP Size",1,10,2,function(v)
         getgenv().HitboxSize=v; pcall(applyHitbox) end)
@@ -1878,9 +2209,6 @@ do
     addSld(s3,"Boost Strength",20,120,35,function(v) BOOST_SPD=v end)
     addKey(s3,"Punch Boost Hotkey",nil,"fastment",nil)
 
-    local s4=sec(sc,"PANIC")
-    addBtn(s4,"PANIC","Reset everything & destroy hub",function()
-        panic(GUI) end, Color3.fromRGB(180,40,40))
 end
 
 -- ── SELF ───────────────────────────────────────────
@@ -1984,15 +2312,9 @@ do
     end)
 end
 
--- ── SETTINGS ───────────────────────────────────────
+-- ── KEYBINDS ───────────────────────────────────────
 do
-    local sc=Tabs["Settings"].scroll
-
-    -- Configs
-    local sc1=sec(sc,"CONFIGS")
-    addConfigManager(sc1)
-
-    -- Keybinds
+    local sc=Tabs["Keybinds"].scroll
     local sk=sec(sc,"KEYBINDS")
     addKey(sk,"Hub Toggle",Enum.KeyCode.M,"hub",
         function(k) KBLBL.Text=k.Name.."  to toggle" end,
@@ -2001,7 +2323,6 @@ do
         kbBind("panic",k,function() panic(GUI) end)
     end, function() kbClear("panic") end)
     addKey(sk,"Fly",Enum.KeyCode.F,"fly",nil)
-    addKey(sk,"Teleport",Enum.KeyCode.T,"tp",nil)
     addKey(sk,"Always Crit",nil,"crit",function(k)
         kbBind("crit",k,function()
             local v=not getgenv().AlwaysCrit; getgenv().AlwaysCrit=v
@@ -2012,7 +2333,13 @@ do
         kbBind("hbox",k,function()
             local v=not getgenv().HitboxEnabled; getgenv().HitboxEnabled=v
             if UISync.hbox then UISync.hbox(v) end
-            if v then pcall(applyHitbox) else for p,_ in pairs(hbWL) do hbRemPlr(p) end end
+            if v then
+                for _,p in ipairs(Players:GetPlayers()) do if p~=LP then evalHbPlr(p) end end
+                pcall(applyHitbox)
+            else
+                local toRem={}; for p,_ in pairs(hbWL) do toRem[#toRem+1]=p end
+                for _,p in ipairs(toRem) do hbRemPlr(p) end; hbWL={}; hbOrig={}
+            end
             notify("Hitbox",v and "ON" or "OFF",v and "ok" or "warn",1.5)
         end) end)
     addKey(sk,"Anti-Weave",nil,"aw",function(k)
@@ -2029,6 +2356,15 @@ do
             if v then enableFastment() else disableFastment() end
             notify("Punch Boost",v and "ON" or "OFF",v and "ok" or "warn",1.5)
         end) end)
+end
+
+-- ── SETTINGS ───────────────────────────────────────
+do
+    local sc=Tabs["Settings"].scroll
+
+    -- Configs
+    local sc1=sec(sc,"CONFIGS")
+    addConfigManager(sc1)
 
     -- Interface
     local si=sec(sc,"INTERFACE")
@@ -2036,8 +2372,6 @@ do
         WM.Visible=v end)
     addTgl(si,"Debug Info","Show PlaceID / Job / Players / Coords",false,function(v)
         DBG.Visible=v end)
-    addInp(si,"Watermark Text","DemonHub",function(v)
-        if v and v~="" then WMLBL.Text=v.."  •  "..LP.Name end end)
     -- ── Theme ─────────────────────────────────────────
     -- Palette: dark colors → bright replacements
     local function c3eq(a,b)
@@ -2067,6 +2401,28 @@ do
     }
     local function applyTheme(name)
         local toBright = (name == "Bright")
+        -- Update live T palette so hover/tween closures use the correct colors
+        if toBright then
+            T.BG      = Color3.fromRGB(232,232,245)
+            T.Surface = Color3.fromRGB(218,218,235)
+            T.Card    = Color3.fromRGB(208,208,228)
+            T.CardH   = Color3.fromRGB(196,196,220)
+            T.Track   = Color3.fromRGB(178,178,205)
+            T.Border  = Color3.fromRGB(190,190,215)
+            T.StatBG  = Color3.fromRGB(222,222,240)
+            T.Text    = Color3.fromRGB(18, 18,  40)
+            T.Muted   = Color3.fromRGB(72, 72, 118)
+        else
+            T.BG      = Color3.fromRGB(10,  10,  16)
+            T.Surface = Color3.fromRGB(17,  17,  27)
+            T.Card    = Color3.fromRGB(22,  22,  34)
+            T.CardH   = Color3.fromRGB(28,  28,  44)
+            T.Track   = Color3.fromRGB(44,  44,  68)
+            T.Border  = Color3.fromRGB(38,  38,  58)
+            T.StatBG  = Color3.fromRGB(12,  12,  20)
+            T.Text    = Color3.fromRGB(235, 235, 255)
+            T.Muted   = Color3.fromRGB(105, 105, 145)
+        end
         local function remap(col)
             for _, p in ipairs(BRT) do
                 local from = toBright and p[1] or p[2]
@@ -2142,20 +2498,20 @@ do
         spawn(function() wait(1.5); TeleportService:Teleport(id,LP) end) end)
 end
 
--- ── Credits bottom button (outside TLIST, anchored to SB bottom) ──────
+-- ── Creator bottom button (outside TLIST, anchored to SB bottom) ──────
 local credBtnActive = false
 local credBtn = mk("TextButton",{
     AnchorPoint=Vector2.new(0,1),
     BackgroundColor3=Color3.fromRGB(20,12,36),
-    Position=UDim2.new(0,9,1,-10),
-    Size=UDim2.new(1,-18,0,28),
-    Text="Credits",
+    Position=UDim2.new(0,9,1,-5),
+    Size=UDim2.new(1,-18,0,26),
+    Text="Creator",
     TextColor3=T.AccentL, TextSize=11, Font=FNB,
     ZIndex=13, Parent=SB
 })
 rnd(credBtn,6); bdr(credBtn,T.Accent)
 
--- ── Credits page (in CA, like a tab page but not in Tabs{}) ──────────
+-- ── Creator page (in CA, like a tab page but not in Tabs{}) ──────────
 credPage = mk("Frame",{BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),Visible=false,ZIndex=12,Parent=CA})
 -- Center card
 local credCard = mk("Frame",{
