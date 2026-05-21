@@ -15,11 +15,11 @@ local PGui = LP:WaitForChild("PlayerGui")
 -- ══════════════════════════════════════════════════
 --  GETGENV STATE  (persists across re-runs)
 -- ══════════════════════════════════════════════════
-getgenv().WalkSpeed         = getgenv().WalkSpeed         or 16
+getgenv().WalkSpeed         = getgenv().WalkSpeed         or 14
 getgenv().JumpPower         = getgenv().JumpPower         or 50
 getgenv().FlyEnabled        = getgenv().FlyEnabled        or false
 getgenv().NoclipEnabled     = getgenv().NoclipEnabled     or false
-getgenv().InfJump           = getgenv().InfJump           or false
+getgenv().PlayerESP         = getgenv().PlayerESP         or false
 getgenv().AntiAFK           = getgenv().AntiAFK           or true
 getgenv().AlwaysCrit        = getgenv().AlwaysCrit        or false
 getgenv().CritSize          = getgenv().CritSize          or 6
@@ -66,7 +66,7 @@ local function cfgEncode()
         jumpPower        = getgenv().JumpPower,
         fly              = getgenv().FlyEnabled,
         noclip           = getgenv().NoclipEnabled,
-        infJump          = getgenv().InfJump,
+        playerEsp        = getgenv().PlayerESP,
         antiAfk          = getgenv().AntiAFK,
         alwaysCrit       = getgenv().AlwaysCrit,
         critSize         = getgenv().CritSize,
@@ -85,11 +85,11 @@ end
 
 local function cfgApply(t)
     if not t then return end
-    getgenv().WalkSpeed        = t.walkSpeed   or 16
+    getgenv().WalkSpeed        = t.walkSpeed   or 14
     getgenv().JumpPower        = t.jumpPower   or 50
     getgenv().FlyEnabled       = t.fly         or false
     getgenv().NoclipEnabled    = t.noclip      or false
-    getgenv().InfJump          = t.infJump     or false
+    getgenv().PlayerESP        = t.playerEsp   or false
     getgenv().AntiAFK          = t.antiAfk     ~= false
     getgenv().AlwaysCrit       = t.alwaysCrit  or false
     getgenv().CritSize         = t.critSize    or 6
@@ -173,42 +173,52 @@ spawn(function()
     end) end
 end)
 
--- Fly
-local flyConn, flyBP, flyBG
+-- Fly  (BodyVelocity — direct, no spring lag)
+local flyConn, flyBV, flyBG
+local FLY_SPD = 46   -- base speed in studs/s
 local function enableFly()
     local c = LP.Character; if not c then return end
     local hrp = c:FindFirstChild("HumanoidRootPart")
     local hum = c:FindFirstChildOfClass("Humanoid")
     if not hrp or not hum then return end
     hum.PlatformStand = true
-    flyBP = Instance.new("BodyPosition")
-    flyBP.MaxForce   = Vector3.new(1e5,1e5,1e5)
-    flyBP.Position   = hrp.Position
-    flyBP.Parent     = hrp
+    -- velocity driver
+    flyBV = Instance.new("BodyVelocity")
+    flyBV.Velocity  = Vector3.new(0,0,0)
+    flyBV.MaxForce  = Vector3.new(1e5,1e5,1e5)
+    flyBV.P         = 1e4
+    flyBV.Parent    = hrp
+    -- gyro to keep character upright / facing cam
     flyBG = Instance.new("BodyGyro")
-    flyBG.MaxTorque  = Vector3.new(1e5,1e5,1e5)
-    flyBG.CFrame     = hrp.CFrame
-    flyBG.Parent     = hrp
+    flyBG.MaxTorque = Vector3.new(1e5,1e5,1e5)
+    flyBG.P         = 1e4
+    flyBG.D         = 500
+    flyBG.CFrame    = hrp.CFrame
+    flyBG.Parent    = hrp
     flyConn = RunService.Heartbeat:Connect(function()
         if not getgenv().FlyEnabled then return end
-        local cam   = workspace.CurrentCamera
-        local spd   = 46
+        local cam = workspace.CurrentCamera
+        -- Flatten LookVector to horizontal plane so W/S stay level
+        local look  = cam.CFrame.LookVector
+        local flat  = Vector3.new(look.X, 0, look.Z)
+        if flat.Magnitude > 0.01 then flat = flat.Unit else flat = Vector3.new(0,0,-1) end
+        local right = cam.CFrame.RightVector
         local dir   = Vector3.new()
-        if UserInputService:IsKeyDown(Enum.KeyCode.W)          then dir = dir + cam.CFrame.LookVector  end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S)          then dir = dir - cam.CFrame.LookVector  end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A)          then dir = dir - cam.CFrame.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D)          then dir = dir + cam.CFrame.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space)      then dir = dir + Vector3.new(0,1,0)    end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)  then dir = dir - Vector3.new(0,1,0)    end
+        if UserInputService:IsKeyDown(Enum.KeyCode.W)         then dir = dir + flat  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S)         then dir = dir - flat  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A)         then dir = dir - right end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D)         then dir = dir + right end
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space)     then dir = dir + Vector3.new(0,1,0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then dir = dir - Vector3.new(0,1,0) end
         if dir.Magnitude > 0 then dir = dir.Unit end
-        flyBP.Position = hrp.Position + dir * spd * 0.05
-        flyBG.CFrame   = cam.CFrame
+        flyBV.Velocity = dir * FLY_SPD
+        flyBG.CFrame   = CFrame.new(hrp.Position, hrp.Position + flat)
     end)
 end
 local function disableFly()
     if flyConn then flyConn:Disconnect(); flyConn = nil end
-    if flyBP   then flyBP:Destroy();   flyBP  = nil end
-    if flyBG   then flyBG:Destroy();   flyBG  = nil end
+    if flyBV   then flyBV:Destroy();  flyBV = nil end
+    if flyBG   then flyBG:Destroy();  flyBG = nil end
     pcall(function()
         local c = LP.Character; local h = c and c:FindFirstChildOfClass("Humanoid")
         if h then h.PlatformStand = false end
@@ -226,25 +236,25 @@ RunService.Stepped:Connect(function()
     end)
 end)
 
--- Infinite Jump
-UserInputService.JumpRequest:Connect(function()
-    if not getgenv().InfJump then return end
-    pcall(function()
-        local c = LP.Character; local h = c and c:FindFirstChildOfClass("Humanoid")
-        if h then h:ChangeState(Enum.HumanoidStateType.Jumping) end
-    end)
-end)
-
--- Anti-AFK
+-- Anti-AFK  (VirtualUser Idled + periodic heartbeat loop)
 local VUS; pcall(function() VUS = game:GetService("VirtualUser") end)
-if VUS then
-    LP.Idled:Connect(function()
-        if not getgenv().AntiAFK then return end
-        VUS:Button2Down(Vector2.new(), workspace.CurrentCamera.CFrame)
-        wait(1)
-        VUS:Button2Up(Vector2.new(), workspace.CurrentCamera.CFrame)
+local function afkPing()
+    if not getgenv().AntiAFK then return end
+    pcall(function()
+        if VUS then
+            VUS:Button2Down(Vector2.new(), workspace.CurrentCamera.CFrame)
+            wait(0.1)
+            VUS:Button2Up(Vector2.new(), workspace.CurrentCamera.CFrame)
+        end
     end)
 end
+if VUS then
+    LP.Idled:Connect(afkPing)
+end
+-- Periodic fallback every 5 min so the idle timer never reaches the kick threshold
+spawn(function()
+    while true do wait(300) afkPing() end
+end)
 
 -- ══════════════════════════════════════════════════
 --  ALWAYS-CRIT LOGIC
@@ -440,18 +450,26 @@ spawn(function() while true do wait(5); pcall(applyHitbox) end end)
 --  PUNCH SPEED SYSTEM
 -- ══════════════════════════════════════════════════
 local punchIDs = {
+    -- Philly
     ["rbxassetid://18312333191"]=true,["rbxassetid://18312335714"]=true,
     ["rbxassetid://18312338197"]=true,["rbxassetid://18312340119"]=true,
     ["rbxassetid://18312344029"]=true,["rbxassetid://18312346524"]=true,
     ["rbxassetid://18312348771"]=true,["rbxassetid://18312351760"]=true,
+    -- Slap Box
+    ["rbxassetid://17796387423"]=true,["rbxassetid://17796396059"]=true,
+    ["rbxassetid://17796400708"]=true,["rbxassetid://17796403834"]=true,
 }
 local pConns = {}
 local function pDisconn(k) local c=pConns[k]; if c then pcall(function()c:Disconnect()end) end; pConns[k]=nil end
 local function isPunch(t) return t and t.Animation and punchIDs[tostring(t.Animation.AnimationId):lower()] end
 local function findLocalLive()
-    local live=workspace:FindFirstChild("Live"); if not live then return nil end
-    local m=live:FindFirstChild(LP.Name); if not m or not m.Parent then return nil end
-    local h=m:FindFirstChildOfClass("Humanoid"); if not h then return nil end
+    -- Check workspace.Live folder first (game-specific folder)
+    local live = workspace:FindFirstChild("Live")
+    local m = live and live:FindFirstChild(LP.Name)
+    -- Fallback: direct character in workspace
+    if not m or not m.Parent then m = LP.Character end
+    if not m or not m.Parent then return nil end
+    local h = m:FindFirstChildOfClass("Humanoid"); if not h then return nil end
     return m, h, h:FindFirstChildOfClass("Animator")
 end
 local function applyPunchSpeed(mul)
@@ -599,11 +617,159 @@ local function panic(gui)
     getgenv().FastmentEnabled = false
     getgenv().FlyEnabled     = false
     getgenv().NoclipEnabled  = false
-    getgenv().InfJump        = false
+    getgenv().PlayerESP      = false
     disableFastment(); disableFly()
-    getgenv().WalkSpeed = 16; getgenv().JumpPower = 50; applyWalkSpeed()
+    getgenv().WalkSpeed = 14; getgenv().JumpPower = 50; applyWalkSpeed()
+    getgenv().PlayerESP = false   -- periodic loop clears highlights within 0.5 s
     for p,_ in pairs(hbWL) do hbRemPlr(p) end
     if gui then gui:Destroy() end
+end
+
+-- ══════════════════════════════════════════════════
+--  PLAYER ESP
+-- ══════════════════════════════════════════════════
+local espHL = {}   -- [Player] = Highlight instance
+
+local ESP_COLORS = {
+    White  = { fill=Color3.fromRGB(255,255,255), outline=Color3.fromRGB(200,200,200) },
+    Red    = { fill=Color3.fromRGB(255, 60, 60),  outline=Color3.fromRGB(255,150,150) },
+    Purple = { fill=Color3.fromRGB(140, 60,255),  outline=Color3.fromRGB(180,120,255) },
+    Cyan   = { fill=Color3.fromRGB( 60,220,255),  outline=Color3.fromRGB(100,240,255) },
+}
+local espColorKey = "Red"   -- updated by dropdown
+
+local function espColorFor(plr)
+    if espColorKey == "Team" then
+        local ok, c = pcall(function()
+            return plr.TeamColor and plr.TeamColor.Color or Color3.fromRGB(255,60,60)
+        end)
+        return ok and c or Color3.fromRGB(255,60,60), Color3.fromRGB(255,255,255)
+    end
+    local col = ESP_COLORS[espColorKey] or ESP_COLORS.Red
+    return col.fill, col.outline
+end
+
+local function removeESP(plr)
+    if espHL[plr] then pcall(function() espHL[plr]:Destroy() end); espHL[plr]=nil end
+end
+
+local function refreshESP()
+    if not getgenv().PlayerESP then
+        for plr,_ in pairs(espHL) do removeESP(plr) end
+        return
+    end
+    -- remove stale
+    for plr,_ in pairs(espHL) do
+        if not plr.Parent then removeESP(plr) end
+    end
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LP then
+            local char = plr.Character
+            if char then
+                if not espHL[plr] then
+                    local hl = Instance.new("Highlight")
+                    hl.Name = "_ESP_"..plr.Name
+                    hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    hl.FillTransparency  = 0.55
+                    hl.OutlineTransparency = 0
+                    hl.Adornee = char
+                    hl.Parent  = workspace   -- parented to workspace so it renders
+                    espHL[plr] = hl
+                end
+                -- update colour
+                local f, o = espColorFor(plr)
+                espHL[plr].FillColor    = f
+                espHL[plr].OutlineColor = o
+            else
+                removeESP(plr)
+            end
+        end
+    end
+end
+
+Players.PlayerRemoving:Connect(function(p) removeESP(p) end)
+Players.PlayerAdded:Connect(function(p)
+    p.CharacterAdded:Connect(function() wait(0.2); refreshESP() end)
+end)
+spawn(function() while true do wait(0.5); refreshESP() end end)
+
+-- ══════════════════════════════════════════════════
+--  LIGHTING STATE  (fullbright / fog / FOV)
+-- ══════════════════════════════════════════════════
+local Lighting = game:GetService("Lighting")
+local _origBright, _origAmb, _origOutAmb
+local _origFogEnd, _origFogStart
+local _origFOV
+
+local function applyFullbright(on)
+    if on then
+        _origBright  = Lighting.Brightness
+        _origAmb     = Lighting.Ambient
+        _origOutAmb  = Lighting.OutdoorAmbient
+        Lighting.Brightness       = 2
+        Lighting.Ambient          = Color3.fromRGB(178,178,178)
+        Lighting.OutdoorAmbient   = Color3.fromRGB(178,178,178)
+        for _, e in pairs(Lighting:GetChildren()) do
+            if e:IsA("BlurEffect") or e:IsA("ColorCorrectionEffect")
+            or e:IsA("DepthOfFieldEffect") or e:IsA("SunRaysEffect")
+            or e:IsA("BloomEffect") then
+                pcall(function() e.Enabled = false end)
+            end
+        end
+    else
+        if _origBright then
+            Lighting.Brightness     = _origBright
+            Lighting.Ambient        = _origAmb
+            Lighting.OutdoorAmbient = _origOutAmb
+        end
+        for _, e in pairs(Lighting:GetChildren()) do
+            if e:IsA("BlurEffect") or e:IsA("ColorCorrectionEffect")
+            or e:IsA("DepthOfFieldEffect") or e:IsA("SunRaysEffect")
+            or e:IsA("BloomEffect") then
+                pcall(function() e.Enabled = true end)
+            end
+        end
+    end
+end
+
+local function applyNoFog(on)
+    if on then
+        _origFogEnd   = Lighting.FogEnd
+        _origFogStart = Lighting.FogStart
+        Lighting.FogEnd   = 9e9
+        Lighting.FogStart = 9e9
+    else
+        Lighting.FogEnd   = _origFogEnd   or 100000
+        Lighting.FogStart = _origFogStart or 0
+    end
+end
+
+local function applyFOV(v)
+    if not v then
+        if _origFOV then workspace.CurrentCamera.FieldOfView = _origFOV end
+        return
+    end
+    if not _origFOV then _origFOV = workspace.CurrentCamera.FieldOfView end
+    workspace.CurrentCamera.FieldOfView = v
+end
+
+local function applyStretch(on)
+    -- Try executor-specific APIs; silently fails if unavailable
+    pcall(function()
+        if on then
+            if syn and syn.set_viewport_size then
+                syn.set_viewport_size(Vector2.new(1152, 864))
+            elseif setresolution then
+                setresolution(1152, 864)
+            end
+        else
+            if syn and syn.set_viewport_size then
+                syn.set_viewport_size(nil)
+            elseif setresolution then
+                setresolution(1920, 1080)
+            end
+        end
+    end)
 end
 
 -- ══════════════════════════════════════════════════
@@ -1160,17 +1326,15 @@ end
 do
     local sc=Tabs["Main"].scroll
     local s1=sec(sc,"MOVEMENT")
-    addSld(s1,"Walk Speed",16,250,16,function(v)
+    addSld(s1,"Walk Speed",14,250,14,function(v)
         getgenv().WalkSpeed=v; applyWalkSpeed() end)
-    addSld(s1,"Jump Power",50,500,50,function(v)
+    addSld(s1,"Jump Power",0,500,50,function(v)
         getgenv().JumpPower=v end)
     addTgl(s1,"Fly","Float in the air with WASD",false,function(v)
         getgenv().FlyEnabled=v
         if v then enableFly() else disableFly() end end)
     addTgl(s1,"Noclip","Phase through walls",false,function(v)
         getgenv().NoclipEnabled=v end)
-    addTgl(s1,"Infinite Jump","Jump without limits",false,function(v)
-        getgenv().InfJump=v end)
     addKey(s1,"Fly Hotkey",Enum.KeyCode.F,"fly",function(k)
         kbBind("fly",k,function()
             getgenv().FlyEnabled=not getgenv().FlyEnabled
@@ -1195,17 +1359,26 @@ end)
 do
     local sc=Tabs["Visual"].scroll
     local s1=sec(sc,"ESP")
-    addTgl(s1,"Player ESP","Player bounding boxes",false,nil)
-    addTgl(s1,"Item ESP","Ground item highlights",false,nil)
-    addTgl(s1,"NPC ESP","NPC outlines",false,nil)
-    addTgl(s1,"Name Tags","Floating name labels",false,nil)
-    addTgl(s1,"Health Bars","HP bars above heads",false,nil)
-    addDD(s1,"ESP Color",{"Team","White","Red","Purple","Cyan"},"Team",nil)
+    addTgl(s1,"Player ESP","Highlight all enemies through walls",false,function(v)
+        getgenv().PlayerESP=v; refreshESP() end)
+    addTgl(s1,"Item ESP","Ground item highlights",false,nil)    -- placeholder
+    addTgl(s1,"NPC ESP","NPC outlines",false,nil)               -- placeholder
+    addTgl(s1,"Name Tags","Floating name labels",false,nil)     -- placeholder
+    addTgl(s1,"Health Bars","HP bars above heads",false,nil)    -- placeholder
+    addDD(s1,"ESP Color",{"Red","White","Purple","Cyan","Team"},"Red",function(v)
+        espColorKey=v; refreshESP() end)
     local s2=sec(sc,"RENDERING")
-    addSld(s2,"Field of View",60,130,70,nil)
+    addSld(s2,"Field of View",60,130,70,function(v)
+        applyFOV(v) end)
     addSld(s2,"Render Distance",100,2048,512,nil)
-    addTgl(s2,"Fullbright","Remove darkness",false,nil)
-    addTgl(s2,"No Fog","Clear weather fog",false,nil)
+    addTgl(s2,"Fullbright","Remove darkness / lighting effects",false,function(v)
+        applyFullbright(v) end)
+    addTgl(s2,"No Fog","Clear map fog",false,function(v)
+        applyNoFog(v) end)
+    addTgl(s2,"Stretched (4:3)","Stretch viewport to 4:3 ratio",false,function(v)
+        applyStretch(v)
+        if v then notify("Stretch","4:3 applied — may need executor support","info",3)
+        else notify("Stretch","Restored native resolution","info",2) end end)
 end
 
 -- ── WORLD ──────────────────────────────────────────
@@ -1234,7 +1407,7 @@ do
     local sc=Tabs["Player"].scroll
     local s1=sec(sc,"CHARACTER")
     addSld(s1,"Health",0,100,100,nil)
-    addSld(s1,"Walk Speed",16,250,16,function(v)
+    addSld(s1,"Walk Speed",14,250,14,function(v)
         getgenv().WalkSpeed=v; applyWalkSpeed() end)
     addTgl(s1,"God Mode","Take no damage",false,nil)
     addTgl(s1,"Invisible","Become invisible",false,nil)
