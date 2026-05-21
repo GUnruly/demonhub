@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════
---   ScriptHub  |  Custom UI  |  No Libraries
+--   Demon Hub  |  Custom UI  |  No Libraries
 -- ═══════════════════════════════════════════════════
 
 local Players          = game:GetService("Players")
@@ -15,12 +15,14 @@ local PGui = LP:WaitForChild("PlayerGui")
 -- ══════════════════════════════════════════════════
 --  GETGENV STATE  (persists across re-runs)
 -- ══════════════════════════════════════════════════
-getgenv().WalkSpeed         = getgenv().WalkSpeed         or 14
+getgenv().WalkSpeed         = getgenv().WalkSpeed         or 12
 getgenv().JumpPower         = getgenv().JumpPower         or 50
 getgenv().FlyEnabled        = getgenv().FlyEnabled        or false
 getgenv().NoclipEnabled     = getgenv().NoclipEnabled     or false
 getgenv().PlayerESP         = getgenv().PlayerESP         or false
 getgenv().AntiAFK           = getgenv().AntiAFK           or true
+getgenv().SmartHitbox       = getgenv().SmartHitbox       or false
+getgenv().HitboxTeamCheck   = getgenv().HitboxTeamCheck   or false
 getgenv().AlwaysCrit        = getgenv().AlwaysCrit        or false
 getgenv().CritSize          = getgenv().CritSize          or 6
 getgenv().CritTransparency  = getgenv().CritTransparency  or 0.8
@@ -35,7 +37,8 @@ getgenv().FastmentEnabled   = getgenv().FastmentEnabled   or false
 -- ══════════════════════════════════════════════════
 --  KEYBIND MANAGER
 -- ══════════════════════════════════════════════════
-local KB = {}   -- id → { key=KeyCode|nil, cb=fn }
+local KB = {}     -- id → { key=KeyCode|nil, cb=fn }
+local UISync = {} -- id → function(bool)  external toggle sync
 
 local function kbBind(id, key, cb)
     KB[id] = { key = key, cb = cb }
@@ -58,7 +61,7 @@ end)
 --  CONFIG SYSTEM
 -- ══════════════════════════════════════════════════
 local CFGS = {}   -- name → encoded string (in-memory + file)
-local CFG_DIR = "ScriptHub"
+local CFG_DIR = "DemonHub"
 
 local function cfgEncode()
     local t = {
@@ -78,6 +81,8 @@ local function cfgEncode()
         antiWeave        = getgenv().AntiWeave,
         punchSpeed       = getgenv().PunchSpeed,
         fastment         = getgenv().FastmentEnabled,
+        smartHitbox      = getgenv().SmartHitbox,
+        hitboxTeamCheck  = getgenv().HitboxTeamCheck,
     }
     local ok, s = pcall(function() return HttpService:JSONEncode(t) end)
     return ok and s or ""
@@ -85,7 +90,7 @@ end
 
 local function cfgApply(t)
     if not t then return end
-    getgenv().WalkSpeed        = t.walkSpeed   or 14
+    getgenv().WalkSpeed        = t.walkSpeed   or 12
     getgenv().JumpPower        = t.jumpPower   or 50
     getgenv().FlyEnabled       = t.fly         or false
     getgenv().NoclipEnabled    = t.noclip      or false
@@ -98,9 +103,11 @@ local function cfgApply(t)
     getgenv().HitboxEnabled    = t.hitbox      or false
     getgenv().HitboxSize       = t.hitboxSize  or 2
     getgenv().HitboxTransp     = t.hitboxTransp or 0.4
-    getgenv().AntiWeave        = t.antiWeave   or false
-    getgenv().PunchSpeed       = t.punchSpeed  or 1.7
-    getgenv().FastmentEnabled  = t.fastment    or false
+    getgenv().AntiWeave        = t.antiWeave        or false
+    getgenv().PunchSpeed       = t.punchSpeed       or 1.0
+    getgenv().FastmentEnabled  = t.fastment         or false
+    getgenv().SmartHitbox      = t.smartHitbox      or false
+    getgenv().HitboxTeamCheck  = t.hitboxTeamCheck  or false
 end
 
 local function cfgSave(name)
@@ -182,16 +189,17 @@ local function enableFly()
     local hum = c:FindFirstChildOfClass("Humanoid")
     if not hrp or not hum then return end
     hum.PlatformStand = true
+    pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
     -- velocity driver
     flyBV = Instance.new("BodyVelocity")
     flyBV.Velocity  = Vector3.new(0,0,0)
-    flyBV.MaxForce  = Vector3.new(1e5,1e5,1e5)
-    flyBV.P         = 1e4
+    flyBV.MaxForce  = Vector3.new(1e9,1e9,1e9)
+    flyBV.P         = 1e9
     flyBV.Parent    = hrp
     -- gyro to keep character upright / facing cam
     flyBG = Instance.new("BodyGyro")
-    flyBG.MaxTorque = Vector3.new(1e5,1e5,1e5)
-    flyBG.P         = 1e4
+    flyBG.MaxTorque = Vector3.new(1e9,1e9,1e9)
+    flyBG.P         = 1e9
     flyBG.D         = 500
     flyBG.CFrame    = hrp.CFrame
     flyBG.Parent    = hrp
@@ -359,12 +367,21 @@ end
 
 local function evalHbPlr(plr)
     if not plr then return end
-    local c   = plr.Character
-    local h   = c and c:FindFirstChildOfClass("Humanoid")
-    local ok  = h and h.Health > 0
-    local kn  = getKnocked(getLiveEntry(plr))
-    local nkn = not kn or kn.Value == false
-    if ok and nkn then hbAddPlr(plr) else hbRemPlr(plr) end
+    -- Hitbox team check
+    if getgenv().HitboxTeamCheck then
+        local ok, same = pcall(function() return plr.Team ~= nil and LP.Team ~= nil and plr.Team == LP.Team end)
+        if ok and same then hbRemPlr(plr); return end
+    end
+    local c = plr.Character
+    local h = c and c:FindFirstChildOfClass("Humanoid")
+    if not (h and h.Health > 0) then hbRemPlr(plr); return end
+    -- Smart hitbox: skip ragdolled / knocked-down players
+    if getgenv().SmartHitbox then
+        local kn = getKnocked(getLiveEntry(plr))
+        if kn and kn.Value == true then hbRemPlr(plr) else hbAddPlr(plr) end
+    else
+        hbAddPlr(plr)  -- always expand when smart hitbox is off
+    end
 end
 
 local function attachKnocked(plr, entry)
@@ -619,8 +636,8 @@ local function panic(gui)
     getgenv().NoclipEnabled  = false
     getgenv().PlayerESP      = false
     disableFastment(); disableFly()
-    getgenv().WalkSpeed = 14; getgenv().JumpPower = 50; applyWalkSpeed()
-    getgenv().PlayerESP = false   -- periodic loop clears highlights within 0.5 s
+    getgenv().WalkSpeed = 12; getgenv().JumpPower = 50; applyWalkSpeed()
+    getgenv().PlayerESP = false; disableFPSBoost()
     for p,_ in pairs(hbWL) do hbRemPlr(p) end
     if gui then gui:Destroy() end
 end
@@ -701,18 +718,22 @@ local _origBright, _origAmb, _origOutAmb
 local _origFogEnd, _origFogStart
 local _origFOV
 
+local _origGlobalShadows
 local function applyFullbright(on)
     if on then
-        _origBright  = Lighting.Brightness
-        _origAmb     = Lighting.Ambient
-        _origOutAmb  = Lighting.OutdoorAmbient
-        Lighting.Brightness       = 2
-        Lighting.Ambient          = Color3.fromRGB(178,178,178)
-        Lighting.OutdoorAmbient   = Color3.fromRGB(178,178,178)
+        _origBright        = Lighting.Brightness
+        _origAmb           = Lighting.Ambient
+        _origOutAmb        = Lighting.OutdoorAmbient
+        _origGlobalShadows = Lighting.GlobalShadows
+        Lighting.Brightness       = 6            -- very bright
+        Lighting.Ambient          = Color3.fromRGB(255,255,255)
+        Lighting.OutdoorAmbient   = Color3.fromRGB(255,255,255)
+        Lighting.GlobalShadows    = false
+        Lighting.ClockTime        = 14           -- midday
         for _, e in pairs(Lighting:GetChildren()) do
             if e:IsA("BlurEffect") or e:IsA("ColorCorrectionEffect")
             or e:IsA("DepthOfFieldEffect") or e:IsA("SunRaysEffect")
-            or e:IsA("BloomEffect") then
+            or e:IsA("BloomEffect") or e:IsA("Atmosphere") then
                 pcall(function() e.Enabled = false end)
             end
         end
@@ -721,11 +742,12 @@ local function applyFullbright(on)
             Lighting.Brightness     = _origBright
             Lighting.Ambient        = _origAmb
             Lighting.OutdoorAmbient = _origOutAmb
+            Lighting.GlobalShadows  = _origGlobalShadows
         end
         for _, e in pairs(Lighting:GetChildren()) do
             if e:IsA("BlurEffect") or e:IsA("ColorCorrectionEffect")
             or e:IsA("DepthOfFieldEffect") or e:IsA("SunRaysEffect")
-            or e:IsA("BloomEffect") then
+            or e:IsA("BloomEffect") or e:IsA("Atmosphere") then
                 pcall(function() e.Enabled = true end)
             end
         end
@@ -754,22 +776,53 @@ local function applyFOV(v)
 end
 
 local function applyStretch(on)
-    -- Try executor-specific APIs; silently fails if unavailable
     pcall(function()
         if on then
-            if syn and syn.set_viewport_size then
-                syn.set_viewport_size(Vector2.new(1152, 864))
-            elseif setresolution then
-                setresolution(1152, 864)
-            end
+            if syn and syn.set_viewport_size then syn.set_viewport_size(Vector2.new(1152,864))
+            elseif setresolution then setresolution(1152,864) end
         else
-            if syn and syn.set_viewport_size then
-                syn.set_viewport_size(nil)
-            elseif setresolution then
-                setresolution(1920, 1080)
-            end
+            if syn and syn.set_viewport_size then syn.set_viewport_size(nil)
+            elseif setresolution then setresolution(1920,1080) end
         end
     end)
+end
+
+-- ══════════════════════════════════════════════════
+--  FPS BOOSTER  (moves textures into RS stash)
+-- ══════════════════════════════════════════════════
+local fpsBoosted = false
+local fpsStash   = {}
+
+local function enableFPSBoost()
+    if fpsBoosted then return end; fpsBoosted = true
+    local RS = game:GetService("ReplicatedStorage")
+    local stash = Instance.new("Folder"); stash.Name="_DH_FPS"; stash.Parent=RS
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("Texture") or obj:IsA("Decal") then
+            pcall(function()
+                fpsStash[#fpsStash+1]={obj=obj,parent=obj.Parent,kind="td"}
+                obj.Parent=stash
+            end)
+        elseif obj:IsA("BasePart") and obj.Material~=Enum.Material.SmoothPlastic then
+            pcall(function()
+                fpsStash[#fpsStash+1]={obj=obj,mat=obj.Material,kind="mat"}
+                obj.Material=Enum.Material.SmoothPlastic
+            end)
+        end
+    end
+end
+
+local function disableFPSBoost()
+    if not fpsBoosted then return end; fpsBoosted = false
+    for _, e in pairs(fpsStash) do
+        pcall(function()
+            if e.kind=="td"  then e.obj.Parent   = e.parent end
+            if e.kind=="mat" then e.obj.Material  = e.mat    end
+        end)
+    end
+    fpsStash = {}
+    local RS = game:GetService("ReplicatedStorage")
+    local stash = RS:FindFirstChild("_DH_FPS"); if stash then stash:Destroy() end
 end
 
 -- ══════════════════════════════════════════════════
@@ -822,7 +875,7 @@ end
 --  ROOT GUI
 -- ══════════════════════════════════════════════════
 local GUI = mk("ScreenGui",{
-    Name="ScriptHub", ResetOnSpawn=false,
+    Name="DemonHub", ResetOnSpawn=false,
     ZIndexBehavior=Enum.ZIndexBehavior.Sibling,
     IgnoreGuiInset=true, Parent=PGui,
 })
@@ -870,7 +923,7 @@ rnd(WM,6); bdr(WM)
 local WMDOT = mk("Frame",{BackgroundColor3=T.Accent,Position=UDim2.new(0,10,0.5,-4),
     Size=UDim2.new(0,8,0,8),ZIndex=21,Parent=WM}); rnd(WMDOT,4)
 mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,26,0,0),
-    Size=UDim2.new(1,-30,1,0),Text="ScriptHub  •  "..LP.Name,
+    Size=UDim2.new(1,-30,1,0),Text="DemonHub  •  "..LP.Name,
     TextColor3=T.Muted,TextSize=11,Font=FN,
     TextXAlignment=Enum.TextXAlignment.Left,ZIndex=21,Parent=WM})
 do local d,ds,sp=false
@@ -920,11 +973,11 @@ local ALINE=mk("Frame",{BackgroundColor3=T.Accent,Position=UDim2.new(0,0,1,-2),S
 grd(ALINE,T.AccentL,T.AccentD,0)
 local LOGO=mk("Frame",{BackgroundColor3=T.Accent,Position=UDim2.new(0,14,0.5,-14),Size=UDim2.new(0,28,0,28),ZIndex=12,Parent=TB})
 rnd(LOGO,8); grd(LOGO,T.AccentL,T.AccentD,135)
-mk("TextLabel",{BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),Text="S",TextColor3=T.White,TextSize=16,Font=FNB,ZIndex=13,Parent=LOGO})
+mk("TextLabel",{BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),Text="D",TextColor3=T.White,TextSize=16,Font=FNB,ZIndex=13,Parent=LOGO})
 mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,50,0,7),Size=UDim2.new(0,180,0,19),
-    Text="ScriptHub",TextColor3=T.Text,TextSize=15,Font=FNB,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=12,Parent=TB})
+    Text="Demon Hub",TextColor3=T.Text,TextSize=15,Font=FNB,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=12,Parent=TB})
 mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,50,0,27),Size=UDim2.new(0,180,0,14),
-    Text="v1.0  •  Free",TextColor3=T.Muted,TextSize=10,Font=FN,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=12,Parent=TB})
+    Text="v2.0  •  Private",TextColor3=T.Muted,TextSize=10,Font=FN,TextXAlignment=Enum.TextXAlignment.Left,ZIndex=12,Parent=TB})
 
 local CBTN=mk("TextButton",{AnchorPoint=Vector2.new(1,0.5),BackgroundColor3=T.Red,
     Position=UDim2.new(1,-14,0.5,0),Size=UDim2.new(0,13,0,13),Text="",ZIndex=14,Parent=TB}); rnd(CBTN,7)
@@ -1099,7 +1152,7 @@ local function addBtn(parent,name,desc,cb,col)
     return r
 end
 
--- Toggle
+-- Toggle  — returns (row, getState, setStateExternal)
 local function addTgl(parent,name,desc,def,cb)
     local state=(def==true); local r=row(parent,46); rowLbls(r,name,desc)
     local track=mk("Frame",{AnchorPoint=Vector2.new(1,0.5),BackgroundColor3=state and T.Accent or T.Track,
@@ -1107,6 +1160,14 @@ local function addTgl(parent,name,desc,def,cb)
     local knob=mk("Frame",{AnchorPoint=Vector2.new(0,0.5),BackgroundColor3=T.White,
         Position=UDim2.new(0,state and 22 or 2,0.5,0),Size=UDim2.new(0,20,0,20),ZIndex=18,Parent=track}); rnd(knob,10)
     local hit=mk("TextButton",{BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),Text="",ZIndex=19,Parent=track})
+    -- External setter: syncs UI without firing cb (used by keybind system)
+    local function setExt(v)
+        if state == v then return end
+        state = v
+        tw(track,{BackgroundColor3=state and T.Accent or T.Track},SF)
+        tw(knob,{Position=UDim2.new(0,state and 22 or 2,0.5,0)},SF)
+        setActive(state and 1 or -1)
+    end
     hit.MouseButton1Click:Connect(function()
         state=not state
         tw(track,{BackgroundColor3=state and T.Accent or T.Track},SF)
@@ -1115,7 +1176,7 @@ local function addTgl(parent,name,desc,def,cb)
         if cb then cb(state) end
     end)
     if state then setActive(1) end
-    return r, function() return state end
+    return r, function() return state end, setExt
 end
 
 -- Slider
@@ -1326,33 +1387,36 @@ end
 do
     local sc=Tabs["Main"].scroll
     local s1=sec(sc,"MOVEMENT")
-    addSld(s1,"Walk Speed",14,250,14,function(v)
+    addSld(s1,"Walk Speed",12,250,12,function(v)
         getgenv().WalkSpeed=v; applyWalkSpeed() end)
     addSld(s1,"Jump Power",0,500,50,function(v)
         getgenv().JumpPower=v end)
-    addTgl(s1,"Fly","Float in the air with WASD",false,function(v)
+    local _,_,setFlyUI = addTgl(s1,"Fly","Float in the air with WASD  (F)",false,function(v)
         getgenv().FlyEnabled=v
         if v then enableFly() else disableFly() end end)
-    addTgl(s1,"Noclip","Phase through walls",false,function(v)
+    UISync.fly = setFlyUI
+    local _,_,setNcUI = addTgl(s1,"Noclip","Phase through walls",false,function(v)
         getgenv().NoclipEnabled=v end)
+    UISync.noclip = setNcUI
     addKey(s1,"Fly Hotkey",Enum.KeyCode.F,"fly",function(k)
         kbBind("fly",k,function()
             getgenv().FlyEnabled=not getgenv().FlyEnabled
+            if UISync.fly then UISync.fly(getgenv().FlyEnabled) end
             if getgenv().FlyEnabled then enableFly() else disableFly() end
+            notify("Fly",getgenv().FlyEnabled and "ON" or "OFF",getgenv().FlyEnabled and "ok" or "warn",1.5)
         end)
     end)
     local s2=sec(sc,"AUTOMATION")
-    addBtn(s2,"Auto Farm","Farms resources automatically",nil)
-    addBtn(s2,"Auto Collect","Collects items in radius",nil)
     addTgl(s2,"Anti AFK","Prevents inactivity kick",true,function(v)
         getgenv().AntiAFK=v end)
-    addSld(s2,"Farm Radius",10,500,50,nil)
 end
 
 -- Register fly keybind default
 kbBind("fly",Enum.KeyCode.F,function()
-    getgenv().FlyEnabled=not getgenv().FlyEnabled
-    if getgenv().FlyEnabled then enableFly() else disableFly() end
+    local v=not getgenv().FlyEnabled; getgenv().FlyEnabled=v
+    if UISync.fly then UISync.fly(v) end
+    if v then enableFly() else disableFly() end
+    notify("Fly",v and "ON" or "OFF",v and "ok" or "warn",1.5)
 end)
 
 -- ── VISUAL ─────────────────────────────────────────
@@ -1361,108 +1425,198 @@ do
     local s1=sec(sc,"ESP")
     addTgl(s1,"Player ESP","Highlight all enemies through walls",false,function(v)
         getgenv().PlayerESP=v; refreshESP() end)
-    addTgl(s1,"Item ESP","Ground item highlights",false,nil)    -- placeholder
-    addTgl(s1,"NPC ESP","NPC outlines",false,nil)               -- placeholder
-    addTgl(s1,"Name Tags","Floating name labels",false,nil)     -- placeholder
-    addTgl(s1,"Health Bars","HP bars above heads",false,nil)    -- placeholder
+    addTgl(s1,"NPC ESP","NPC outlines",false,nil)
+    addTgl(s1,"Name Tags","Floating name labels",false,nil)
+    addTgl(s1,"Health Bars","HP bars above heads",false,nil)
     addDD(s1,"ESP Color",{"Red","White","Purple","Cyan","Team"},"Red",function(v)
         espColorKey=v; refreshESP() end)
     local s2=sec(sc,"RENDERING")
-    addSld(s2,"Field of View",60,130,70,function(v)
-        applyFOV(v) end)
-    addSld(s2,"Render Distance",100,2048,512,nil)
-    addTgl(s2,"Fullbright","Remove darkness / lighting effects",false,function(v)
+    addSld(s2,"Field of View",60,130,70,function(v) applyFOV(v) end)
+    addTgl(s2,"Fullbright","Max brightness — removes all lighting fx",false,function(v)
         applyFullbright(v) end)
-    addTgl(s2,"No Fog","Clear map fog",false,function(v)
-        applyNoFog(v) end)
-    addTgl(s2,"Stretched (4:3)","Stretch viewport to 4:3 ratio",false,function(v)
-        applyStretch(v)
-        if v then notify("Stretch","4:3 applied — may need executor support","info",3)
-        else notify("Stretch","Restored native resolution","info",2) end end)
+    addTgl(s2,"No Fog","Clear map fog",false,function(v) applyNoFog(v) end)
+    addTgl(s2,"Stretched (4:3)","4:3 aspect ratio stretch",false,function(v)
+        applyStretch(v) end)
+    local s3=sec(sc,"PERFORMANCE")
+    addTgl(s3,"FPS Boost","Moves all textures into ReplicatedStorage",false,function(v)
+        if v then enableFPSBoost() else disableFPSBoost() end end)
 end
 
 -- ── WORLD ──────────────────────────────────────────
 do
     local sc=Tabs["World"].scroll
     local s1=sec(sc,"PHYSICS")
-    addSld(s1,"Gravity",0,400,196,function(v)
-        workspace.Gravity=v end)
-    addSld(s1,"Wind Speed",0,100,0,nil)
-    addTgl(s1,"Freeze Players","Pause all players",false,nil)
-    addTgl(s1,"No Clip","Phase through objects",false,function(v)
+    addSld(s1,"Gravity",0,400,196,function(v) workspace.Gravity=v end)
+    addTgl(s1,"Noclip","Phase through objects",false,function(v)
         getgenv().NoclipEnabled=v end)
-    local s2=sec(sc,"TIME & WEATHER")
+    local s2=sec(sc,"TIME")
     addSld(s2,"Time of Day",0,24,12,function(v)
-        pcall(function() game:GetService("Lighting").ClockTime=v end) end)
-    addTgl(s2,"Lock Time","Freeze time progression",false,nil)
-    addDD(s2,"Weather",{"Clear","Fog","Rain","Snow","Storm"},"Clear",nil)
-    addBtn(s2,"Set Sunrise","Jump to 06:00",function()
-        pcall(function() game:GetService("Lighting").ClockTime=6 end) end)
-    addBtn(s2,"Set Midnight","Jump to 00:00",function()
-        pcall(function() game:GetService("Lighting").ClockTime=0 end) end)
+        pcall(function() Lighting.ClockTime=v end) end)
+    addTgl(s2,"Lock Time","Freeze time at current value",false,function(v)
+        -- lock: RunService loop to hold ClockTime
+        if v then
+            local t=Lighting.ClockTime
+            RunService.Heartbeat:Connect(function()
+                if not Lighting then return end
+                Lighting.ClockTime=t
+            end)
+        end
+    end)
 end
 
 -- ── PLAYER ─────────────────────────────────────────
+-- User-defined locations: add entries like {"Name", CFrame.new(x,y,z)}
+local LOCATIONS = {
+    -- {"Spawn", CFrame.new(0,5,0)},
+}
 do
     local sc=Tabs["Player"].scroll
-    local s1=sec(sc,"CHARACTER")
-    addSld(s1,"Health",0,100,100,nil)
-    addSld(s1,"Walk Speed",14,250,14,function(v)
+    local s1=sec(sc,"MOVEMENT")
+    addSld(s1,"Walk Speed",12,250,12,function(v)
         getgenv().WalkSpeed=v; applyWalkSpeed() end)
-    addTgl(s1,"God Mode","Take no damage",false,nil)
-    addTgl(s1,"Invisible","Become invisible",false,nil)
-    addTgl(s1,"Always Sprint","Permanent sprint",false,nil)
-    local s2=sec(sc,"TELEPORT")
-    addDD(s2,"Target",{"Nearest","Random","Manual"},"Nearest",nil)
-    addBtn(s2,"To Spawn","Teleport to spawn point",function()
+    addSld(s1,"Jump Power",0,500,50,function(v) getgenv().JumpPower=v end)
+
+    -- ── Location teleport ──
+    local s2=sec(sc,"TELEPORT — LOCATION")
+    local locNames=(function()
+        local t={}; for _,l in ipairs(LOCATIONS) do t[#t+1]=l[1] end
+        return #t>0 and t or {"— add in code —"}
+    end)()
+    local selLoc=locNames[1]
+    addDD(s2,"Location",locNames,locNames[1],function(v) selLoc=v end)
+    addBtn(s2,"Go to Location","Teleport to selected location",function()
+        for _,loc in ipairs(LOCATIONS) do
+            if loc[1]==selLoc then
+                pcall(function()
+                    local h=LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+                    if h then h.CFrame=loc[2] end
+                end)
+                notify("Teleport","→ "..selLoc,"ok",2); return
+            end
+        end
+        notify("Teleport","No locations added yet","warn",2)
+    end)
+
+    -- ── Player teleport ──
+    local s3=sec(sc,"TELEPORT — PLAYER")
+    local selPlayer="—"
+    -- Wrapper frame so we can rebuild the dropdown without ruining layout
+    local pWrap=mk("Frame",{BackgroundTransparency=1,Size=UDim2.new(1,0,0,0),
+        AutomaticSize=Enum.AutomaticSize.Y,Parent=s3})
+    local function rebuildPlayerDD()
+        for _,c in pairs(pWrap:GetChildren()) do c:Destroy() end
+        local names={}
+        for _,p in ipairs(Players:GetPlayers()) do if p~=LP then names[#names+1]=p.Name end end
+        if #names==0 then names={"— no players —"} end
+        selPlayer=names[1]
+        addDD(pWrap,"Player",names,names[1],function(v) selPlayer=v end)
+    end
+    rebuildPlayerDD()
+    -- Refresh + Teleport row
+    local pRow=row(s3,40)
+    mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,12,0,0),
+        Size=UDim2.new(0.35,0,1,0),Text="Action",TextColor3=T.Muted,TextSize=11,Font=FN,
+        TextXAlignment=Enum.TextXAlignment.Left,ZIndex=17,Parent=pRow})
+    local rfBtn=mk("TextButton",{AnchorPoint=Vector2.new(1,0.5),BackgroundColor3=T.Surface,
+        Position=UDim2.new(1,-104,0.5,0),Size=UDim2.new(0,44,0,26),
+        Text="↺",TextColor3=T.Muted,TextSize=13,Font=FNB,ZIndex=18,Parent=pRow})
+    rnd(rfBtn,5); bdr(rfBtn)
+    local tpBtn=mk("TextButton",{AnchorPoint=Vector2.new(1,0.5),BackgroundColor3=T.Accent,
+        Position=UDim2.new(1,-56,0.5,0),Size=UDim2.new(0,44,0,26),
+        Text="TP →",TextColor3=T.White,TextSize=11,Font=FNB,ZIndex=18,Parent=pRow})
+    rnd(tpBtn,5); grd(tpBtn,T.AccentL,T.AccentD,90)
+    rfBtn.MouseButton1Click:Connect(rebuildPlayerDD)
+    tpBtn.MouseButton1Click:Connect(function()
+        if selPlayer:sub(1,1)=="—" then notify("Teleport","No player selected","warn",2); return end
+        local tgt=Players:FindFirstChild(selPlayer)
+        local th=tgt and tgt.Character and tgt.Character:FindFirstChild("HumanoidRootPart")
+        local mh=LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+        if th and mh then
+            pcall(function() mh.CFrame=th.CFrame+Vector3.new(2,0,0) end)
+            notify("Teleport","→ "..selPlayer,"ok",2)
+        else notify("Teleport",selPlayer.." not found","err",2) end
+    end)
+
+    -- ── Cursor teleport ──
+    local s4=sec(sc,"TELEPORT — CURSOR")
+    addBtn(s4,"To Cursor","Teleport to your mouse position (local)",function()
         pcall(function()
-            local c=LP.Character; local hrp=c and c:FindFirstChild("HumanoidRootPart")
-            if hrp then hrp.CFrame=CFrame.new(0,5,0) end end) end)
-    addBtn(s2,"To Cursor","Teleport to mouse hit",function()
-        pcall(function()
-            local ray=workspace:Raycast(
-                workspace.CurrentCamera.CFrame.Position,
-                UserInputService:GetMouseLocation())
-            -- fallback
-            local c=LP.Character; local hrp=c and c:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                local mouse=LP:GetMouse()
-                hrp.CFrame=CFrame.new(mouse.Hit.Position+Vector3.new(0,3,0))
-            end end) end)
-    addBtn(s2,"To Player","Teleport to selection",nil)
-    addKey(s2,"Teleport Key",Enum.KeyCode.T,"tp",nil)
+            local mouse=LP:GetMouse()
+            local h=LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+            if h and mouse.Hit then
+                h.CFrame=CFrame.new(mouse.Hit.Position+Vector3.new(0,3,0))
+            end
+        end)
+    end)
+    addKey(s4,"Teleport Key",Enum.KeyCode.T,"tp",nil)
 end
 
 -- ── COMBAT ─────────────────────────────────────────
 do
     local sc=Tabs["Combat"].scroll
     local s1=sec(sc,"HITBOX")
-    addTgl(s1,"Enable Hitbox","Expands HRP hitbox for all enemies",false,function(v)
+    local _,_,setHboxUI=addTgl(s1,"Enable Hitbox","Expand HRP hitbox for enemies",false,function(v)
         getgenv().HitboxEnabled=v; if v then pcall(applyHitbox) end end)
-    addSld(s1,"HRP Size",1,8,2,function(v)
+    UISync.hbox=setHboxUI
+    addSld(s1,"HRP Size",1,10,2,function(v)
         getgenv().HitboxSize=v; pcall(applyHitbox) end)
     addSld(s1,"HRP Transparency",0,100,40,function(v)
         getgenv().HitboxTransp=v/100; pcall(applyHitbox) end)
-    addTgl(s1,"Anti-Weave","Destroy WeaveStun instances",false,function(v)
+    addTgl(s1,"Team Check","Skip players on your team",false,function(v)
+        getgenv().HitboxTeamCheck=v end)
+    addTgl(s1,"Smart Box","Ignore ragdolled / knocked players",false,function(v)
+        getgenv().SmartHitbox=v end)
+    local _,_,setAwUI=addTgl(s1,"Anti-Weave","Destroy WeaveStun instances",false,function(v)
         getgenv().AntiWeave=v end)
+    UISync.aw=setAwUI
 
     local s2=sec(sc,"ALWAYS CRIT")
-    addTgl(s2,"Enable Crit","Forces UpperTorso crit hitbox",false,function(v)
+    local _,_,setCritUI=addTgl(s2,"Enable Crit","Forces UpperTorso crit hitbox",false,function(v)
         getgenv().AlwaysCrit=v end)
-    addSld(s2,"Crit Size",1,15,6,function(v)
-        getgenv().CritSize=v end)
-    addSld(s2,"Crit Transparency",0,100,80,function(v)
-        getgenv().CritTransparency=v/100 end)
-    addTgl(s2,"Team Check","Skip teammates",false,function(v)
+    UISync.crit=setCritUI
+    addSld(s2,"Crit Size",1,15,6,function(v) getgenv().CritSize=v end)
+    addSld(s2,"Crit Transparency",0,100,80,function(v) getgenv().CritTransparency=v/100 end)
+    addTgl(s2,"Team Check","Skip players on your team",false,function(v)
         getgenv().TeamCheck=v end)
 
     local s3=sec(sc,"COMBAT UTILS")
-    -- Punch speed: slider 17-50 → 1.7-5.0
-    addSld(s3,"Punch Speed ×10",17,50,17,function(v)
-        local spd=v/10; getgenv().PunchSpeed=spd; applyPunchSpeed(spd) end)
-    addTgl(s3,"Fastment","Speed boost on LMB click with tool",false,function(v)
+    -- Punch speed: 10-100 → ×1.0-×10.0 in steps of ×0.1
+    local psRow=row(s3,54)
+    mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,12,0,7),Size=UDim2.new(0.6,0,0,16),
+        Text="Punch Speed",TextColor3=T.Text,TextSize=13,Font=FN,
+        TextXAlignment=Enum.TextXAlignment.Left,ZIndex=17,Parent=psRow})
+    local psLbl=mk("TextLabel",{AnchorPoint=Vector2.new(1,0),BackgroundTransparency=1,
+        Position=UDim2.new(1,-12,0,7),Size=UDim2.new(0,52,0,16),Text="×1.0",
+        TextColor3=T.AccentL,TextSize=12,Font=FNB,TextXAlignment=Enum.TextXAlignment.Right,ZIndex=17,Parent=psRow})
+    local psTrk=mk("Frame",{BackgroundColor3=T.Track,Position=UDim2.new(0,12,0,34),
+        Size=UDim2.new(1,-24,0,6),ZIndex=16,Parent=psRow}); rnd(psTrk,3)
+    local psFill=mk("Frame",{BackgroundColor3=T.Accent,Size=UDim2.new(0,1,0,1),ZIndex=17,Parent=psTrk})
+    rnd(psFill,3); grd(psFill,T.AccentL,T.AccentD,0)
+    local psKnob=mk("Frame",{AnchorPoint=Vector2.new(0.5,0.5),BackgroundColor3=T.White,
+        Position=UDim2.new(0,0,0.5,0),Size=UDim2.new(0,14,0,14),ZIndex=18,Parent=psTrk})
+    rnd(psKnob,7); bdr(psKnob,T.Accent,2)
+    local psHit=mk("TextButton",{BackgroundTransparency=1,Position=UDim2.new(0,-8,0,-8),
+        Size=UDim2.new(1,16,1,16),Text="",ZIndex=19,Parent=psTrk})
+    local psDrag=false
+    local function psUpd(x)
+        local rel=math.clamp((x-psTrk.AbsolutePosition.X)/psTrk.AbsoluteSize.X,0,1)
+        local raw=math.round(10+(100-10)*rel)  -- 10..100
+        local p=(raw-10)/(100-10)
+        tw(psFill,{Size=UDim2.new(p,0,1,0)},0.05)
+        tw(psKnob,{Position=UDim2.new(p,0,0.5,0)},0.05)
+        psLbl.Text=string.format("×%.1f",raw/10)
+        local spd=raw/10; getgenv().PunchSpeed=spd; applyPunchSpeed(spd)
+    end
+    psHit.MouseButton1Down:Connect(function(x) psDrag=true; psUpd(x) end)
+    UserInputService.InputChanged:Connect(function(i)
+        if psDrag and i.UserInputType==Enum.UserInputType.MouseMovement then psUpd(i.Position.X) end end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.MouseButton1 then psDrag=false end end)
+
+    local _,_,setFastUI=addTgl(s3,"Fastment","Speed boost on LMB with a tool equipped",false,function(v)
         getgenv().FastmentEnabled=v
         if v then enableFastment() else disableFastment() end end)
+    UISync.fastment=setFastUI
     addKey(s3,"Fastment Hotkey",nil,"fastment",nil)
 
     local s4=sec(sc,"PANIC")
@@ -1480,48 +1634,64 @@ do
 
     -- Keybinds
     local sk=sec(sc,"KEYBINDS")
-    addKey(sk,"Hub Toggle",    Enum.KeyCode.M,      "hub",
-        function(k) KBLBL.Text = k.Name.."  to toggle" end,
-        function()  KBLBL.Text = "—  to toggle" end)
-    addKey(sk,"Fly",           Enum.KeyCode.F,      "fly",    nil)
-    addKey(sk,"Teleport",      Enum.KeyCode.T,      "tp",     nil)
-    addKey(sk,"Always Crit",   nil,                 "crit",   function(k)
+    addKey(sk,"Hub Toggle",Enum.KeyCode.M,"hub",
+        function(k) KBLBL.Text=k.Name.."  to toggle" end,
+        function()  KBLBL.Text="—  to toggle" end)
+    addKey(sk,"Fly",Enum.KeyCode.F,"fly",nil)
+    addKey(sk,"Teleport",Enum.KeyCode.T,"tp",nil)
+    addKey(sk,"Always Crit",nil,"crit",function(k)
         kbBind("crit",k,function()
-            getgenv().AlwaysCrit=not getgenv().AlwaysCrit end) end)
-    addKey(sk,"Hitbox",        nil,                 "hbox",   function(k)
+            local v=not getgenv().AlwaysCrit; getgenv().AlwaysCrit=v
+            if UISync.crit then UISync.crit(v) end
+            notify("Always Crit",v and "ON" or "OFF",v and "ok" or "warn",1.5)
+        end) end)
+    addKey(sk,"Hitbox",nil,"hbox",function(k)
         kbBind("hbox",k,function()
-            getgenv().HitboxEnabled=not getgenv().HitboxEnabled
-            if getgenv().HitboxEnabled then pcall(applyHitbox) end end) end)
-    addKey(sk,"Anti-Weave",    nil,                 "aw",     function(k)
-        kbBind("aw",k,function() getgenv().AntiWeave=not getgenv().AntiWeave end) end)
-    addKey(sk,"Fastment",      nil,                 "fastment",function(k)
+            local v=not getgenv().HitboxEnabled; getgenv().HitboxEnabled=v
+            if UISync.hbox then UISync.hbox(v) end
+            if v then pcall(applyHitbox) end
+            notify("Hitbox",v and "ON" or "OFF",v and "ok" or "warn",1.5)
+        end) end)
+    addKey(sk,"Anti-Weave",nil,"aw",function(k)
+        kbBind("aw",k,function()
+            local v=not getgenv().AntiWeave; getgenv().AntiWeave=v
+            if UISync.aw then UISync.aw(v) end
+            notify("Anti-Weave",v and "ON" or "OFF",v and "ok" or "warn",1.5)
+        end) end)
+    addKey(sk,"Fastment",nil,"fastment",function(k)
         kbBind("fastment",k,function()
-            getgenv().FastmentEnabled=not getgenv().FastmentEnabled
-            if getgenv().FastmentEnabled then enableFastment() else disableFastment() end end) end)
+            local v=not getgenv().FastmentEnabled; getgenv().FastmentEnabled=v
+            if UISync.fastment then UISync.fastment(v) end
+            if v then enableFastment() else disableFastment() end
+            notify("Fastment",v and "ON" or "OFF",v and "ok" or "warn",1.5)
+        end) end)
 
     -- Interface
     local si=sec(sc,"INTERFACE")
-    addTgl(si,"Watermark","Show watermark overlay",true,function(v)
-        WM.Visible=v end)
     addTgl(si,"Debug Info","Show PlaceID / Job / Players",false,function(v)
         DBG.Visible=v end)
-    addDD(si,"Theme",{"Dark","Darker","AMOLED"},"Dark",function(v)
-        if v=="Darker" then
-            WIN.BackgroundColor3=Color3.fromRGB(6,6,10)
-            TB.BackgroundColor3=Color3.fromRGB(10,10,18)
-            SB.BackgroundColor3=Color3.fromRGB(10,10,18)
-        elseif v=="AMOLED" then
-            WIN.BackgroundColor3=Color3.fromRGB(0,0,0)
-            TB.BackgroundColor3=Color3.fromRGB(6,6,12)
-            SB.BackgroundColor3=Color3.fromRGB(6,6,12)
+    addDD(si,"Theme",{"Dark","Bright"},"Dark",function(v)
+        if v=="Bright" then
+            tw(WIN, {BackgroundColor3=Color3.fromRGB(228,228,242)},0.3)
+            tw(TB,  {BackgroundColor3=Color3.fromRGB(210,210,230)},0.3)
+            tw(SB,  {BackgroundColor3=Color3.fromRGB(210,210,230)},0.3)
+            tw(STAT,{BackgroundColor3=Color3.fromRGB(196,196,218)},0.3)
         else
-            WIN.BackgroundColor3=T.BG
-            TB.BackgroundColor3=T.Surface
-            SB.BackgroundColor3=T.Surface
+            tw(WIN, {BackgroundColor3=T.BG},      0.3)
+            tw(TB,  {BackgroundColor3=T.Surface}, 0.3)
+            tw(SB,  {BackgroundColor3=T.Surface}, 0.3)
+            tw(STAT,{BackgroundColor3=T.StatBG},  0.3)
         end
     end)
-    addSld(si,"UI Opacity",40,100,100,function(v)
-        WIN.BackgroundTransparency=1-(v/100)*0.98 end)
+    -- UI Opacity affects entire hub (WIN + TB + SB + STAT + WM)
+    addSld(si,"UI Opacity",10,100,100,function(v)
+        local tr=(100-v)/100
+        tw(WIN, {BackgroundTransparency=tr},        0.08)
+        tw(TB,  {BackgroundTransparency=tr},        0.08)
+        tw(SB,  {BackgroundTransparency=tr},        0.08)
+        tw(STAT,{BackgroundTransparency=tr},        0.08)
+        tw(WM,  {BackgroundTransparency=math.min(0.92,tr+0.15)},0.08)
+    end)
 
     -- Server
     local ss=sec(sc,"SERVER")
@@ -1583,5 +1753,5 @@ spawn(function()
     tw(WIN,{Size=UDim2.new(0,600,0,450),BackgroundTransparency=0},
         0.42,Enum.EasingStyle.Back,Enum.EasingDirection.Out)
     wait(0.6)
-    notify("ScriptHub","Loaded  •  M to toggle","ok",4)
+    notify("Demon Hub","Loaded  •  M to toggle","ok",4)
 end)
