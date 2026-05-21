@@ -1,1349 +1,1084 @@
--- ═══════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════
 --   ScriptHub  |  Custom UI  |  No Libraries
--- ═══════════════════════════════════════════════════════
+-- ═══════════════════════════════════════════════════
 
 local Players          = game:GetService("Players")
 local TweenService     = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 local RunService       = game:GetService("RunService")
 
-local LocalPlayer = Players.LocalPlayer
-local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
+local LP   = Players.LocalPlayer
+local PGui = LP:WaitForChild("PlayerGui")
 
--- ── Theme ─────────────────────────────────────────────
+-- ── Theme ──────────────────────────────────────────
 local T = {
     BG          = Color3.fromRGB(10,  10,  16),
-    Surface     = Color3.fromRGB(16,  16,  26),
-    Card        = Color3.fromRGB(20,  20,  32),
-    CardHover   = Color3.fromRGB(26,  26,  42),
+    Surface     = Color3.fromRGB(17,  17,  27),
+    Card        = Color3.fromRGB(22,  22,  34),
+    CardH       = Color3.fromRGB(28,  28,  44),
     Accent      = Color3.fromRGB(112, 72,  255),
-    AccentDark  = Color3.fromRGB(80,  48,  200),
-    AccentLight = Color3.fromRGB(160, 110, 255),
+    AccentD     = Color3.fromRGB(80,  48,  200),
+    AccentL     = Color3.fromRGB(165, 115, 255),
     Text        = Color3.fromRGB(235, 235, 255),
-    Muted       = Color3.fromRGB(110, 110, 148),
-    Border      = Color3.fromRGB(36,  36,  56),
-    Toggle      = Color3.fromRGB(46,  46,  70),
-    Success     = Color3.fromRGB(72,  200, 130),
-    Warning     = Color3.fromRGB(255, 185, 50),
-    Danger      = Color3.fromRGB(255, 75,  75),
+    Muted       = Color3.fromRGB(105, 105, 145),
+    Border      = Color3.fromRGB(38,  38,  58),
+    Track       = Color3.fromRGB(44,  44,  68),
     White       = Color3.fromRGB(255, 255, 255),
-    StatusBG    = Color3.fromRGB(12,  12,  20),
+    StatBG      = Color3.fromRGB(12,  12,  20),
+    Green       = Color3.fromRGB(72,  200, 130),
+    Yellow      = Color3.fromRGB(255, 185, 50),
+    Red         = Color3.fromRGB(255, 75,  75),
 }
-local FONT      = Enum.Font.GothamMedium
-local FONT_BOLD = Enum.Font.GothamBold
-local SPD       = 0.18
-local SPD_FAST  = 0.10
+local FN  = Enum.Font.GothamMedium
+local FNB = Enum.Font.GothamBold
+local S   = 0.18
+local SF  = 0.10
 
--- ── Helpers ───────────────────────────────────────────
-local function tw(obj, props, dur, style, dir)
-    TweenService:Create(obj,
-        TweenInfo.new(dur or SPD,
-            style or Enum.EasingStyle.Quart,
-            dir   or Enum.EasingDirection.Out),
-        props):Play()
+-- ── Helpers ────────────────────────────────────────
+local function tw(o, p, d, st, di)
+    TweenService:Create(o,
+        TweenInfo.new(d or S,
+            st or Enum.EasingStyle.Quart,
+            di or Enum.EasingDirection.Out), p):Play()
 end
 
-local function make(cls, props)
+local function mk(cls, t)
     local o = Instance.new(cls)
-    for k, v in pairs(props) do
-        if k ~= "Parent" then o[k] = v end
-    end
-    if props.Parent then o.Parent = props.Parent end
+    for k,v in pairs(t) do if k~="Parent" then o[k]=v end end
+    if t.Parent then o.Parent=t.Parent end
     return o
 end
 
-local function corner(p, r)
+local function rnd(p, r)
     local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, r or 8)
-    c.Parent = p; return c
+    c.CornerRadius = UDim.new(0, r or 8); c.Parent = p; return c
 end
 
-local function stroke(p, col, t)
+local function bdr(p, col, th)
     local s = Instance.new("UIStroke")
-    s.Color           = col or T.Border
-    s.Thickness       = t   or 1
+    s.Color = col or T.Border; s.Thickness = th or 1
     s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
     s.Parent = p; return s
 end
 
-local function pad(p, t, b, l, r)
-    local u = Instance.new("UIPadding")
-    u.PaddingTop    = UDim.new(0, t or 8)
-    u.PaddingBottom = UDim.new(0, b or 8)
-    u.PaddingLeft   = UDim.new(0, l or 8)
-    u.PaddingRight  = UDim.new(0, r or 8)
-    u.Parent = p; return u
-end
-
-local function grad(p, c0, c1, rot)
+local function grd(p, c0, c1, rot)
     local g = Instance.new("UIGradient")
-    g.Color    = ColorSequence.new(c0, c1)
-    g.Rotation = rot or 135
-    g.Parent = p; return g
+    g.Color = ColorSequence.new(c0, c1)
+    g.Rotation = rot or 135; g.Parent = p; return g
 end
 
--- ── Root ──────────────────────────────────────────────
-local GUI = make("ScreenGui", {
-    Name           = "ScriptHub",
-    ResetOnSpawn   = false,
-    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-    IgnoreGuiInset = true,
-    Parent         = PlayerGui,
+-- ══════════════════════════════════════════════════
+--  ROOT  (notifications + watermark live here,
+--  outside WIN so they're never clipped)
+-- ══════════════════════════════════════════════════
+local GUI = mk("ScreenGui", {
+    Name="ScriptHub", ResetOnSpawn=false,
+    ZIndexBehavior=Enum.ZIndexBehavior.Sibling,
+    IgnoreGuiInset=true, Parent=PGui,
 })
 
--- High-ZIndex overlay layer for dropdowns (escapes window clipping)
-local POPUP_LAYER = make("Frame", {
-    BackgroundTransparency = 1,
-    Size   = UDim2.new(1, 0, 1, 0),
-    ZIndex = 80,
-    Parent = GUI,
+-- Overlay layer: dropdown popups parent here so they
+-- escape WIN's ClipsDescendants.  It's a Frame so it
+-- does NOT steal mouse events from siblings below.
+local OVL = mk("Frame", {
+    BackgroundTransparency=1,
+    Size=UDim2.new(1,0,1,0),
+    ZIndex=80, Parent=GUI,
 })
 
--- ══════════════════════════════════════════════════════
---  NOTIFICATION SYSTEM
--- ══════════════════════════════════════════════════════
-local NOTIF_FRAME = make("Frame", {
-    BackgroundTransparency = 1,
-    AnchorPoint = Vector2.new(1, 1),
-    Position    = UDim2.new(1, -16, 1, -16),
-    Size        = UDim2.new(0, 272, 1, 0),
-    ZIndex      = 90,
-    Parent      = GUI,
+-- ══════════════════════════════════════════════════
+--  NOTIFICATIONS
+-- ══════════════════════════════════════════════════
+local NBOX = mk("Frame", {
+    BackgroundTransparency=1,
+    AnchorPoint=Vector2.new(1,1),
+    Position=UDim2.new(1,-14,1,-14),
+    Size=UDim2.new(0,270,1,0),
+    ZIndex=90, Parent=GUI,
 })
-make("UIListLayout", {
-    FillDirection       = Enum.FillDirection.Vertical,
-    VerticalAlignment   = Enum.VerticalAlignment.Bottom,
-    HorizontalAlignment = Enum.HorizontalAlignment.Right,
-    Padding             = UDim.new(0, 6),
-    SortOrder           = Enum.SortOrder.LayoutOrder,
-    Parent              = NOTIF_FRAME,
+mk("UIListLayout",{
+    FillDirection=Enum.FillDirection.Vertical,
+    VerticalAlignment=Enum.VerticalAlignment.Bottom,
+    HorizontalAlignment=Enum.HorizontalAlignment.Right,
+    Padding=UDim.new(0,6), Parent=NBOX,
 })
 
-local NTYPES = {
-    success = { col = Color3.fromRGB(72,  200, 130), icon = "✓" },
-    error   = { col = Color3.fromRGB(255, 75,  75 ), icon = "✕" },
-    warn    = { col = Color3.fromRGB(255, 185, 50 ), icon = "!" },
-    info    = { col = Color3.fromRGB(112, 72,  255), icon = "i" },
+local NT = {
+    ok   = {Color3.fromRGB(72,200,130), "✓"},
+    err  = {Color3.fromRGB(255,75,75),  "✕"},
+    warn = {Color3.fromRGB(255,185,50), "!"},
+    info = {Color3.fromRGB(112,72,255), "i"},
 }
 
-local function notify(title, msg, ntype, duration)
-    local nt  = NTYPES[ntype or "info"] or NTYPES.info
-    local dur = duration or 3
+local function notify(title, msg, kind, dur)
+    local n = NT[kind or "info"] or NT.info
+    dur = dur or 3
 
-    local card = make("Frame", {
-        BackgroundColor3    = Color3.fromRGB(16, 16, 28),
-        Size                = UDim2.new(1, 0, 0, 68),
-        Position            = UDim2.new(1, 30, 0, 0),
-        ZIndex              = 91,
-        ClipsDescendants    = true,
-        Parent              = NOTIF_FRAME,
-    })
-    corner(card, 10)
-    stroke(card, Color3.fromRGB(36, 36, 54), 1)
+    local card = mk("Frame",{
+        BackgroundColor3=Color3.fromRGB(16,16,28),
+        Size=UDim2.new(1,0,0,66),
+        Position=UDim2.new(1,30,0,0),
+        ZIndex=91, ClipsDescendants=true, Parent=NBOX,
+    }); rnd(card,10); bdr(card,Color3.fromRGB(36,36,54))
 
-    -- left accent bar
-    local bar = make("Frame", {
-        BackgroundColor3 = nt.col,
-        Size             = UDim2.new(0, 3, 1, 0),
-        ZIndex           = 92,
-        Parent           = card,
-    })
-    corner(bar, 2)
+    mk("Frame",{BackgroundColor3=n[1],
+        Size=UDim2.new(0,3,1,0), ZIndex=92, Parent=card})
 
-    -- icon badge
-    local badge = make("Frame", {
-        BackgroundColor3 = nt.col,
-        Position         = UDim2.new(0, 12, 0.5, -11),
-        Size             = UDim2.new(0, 22, 0, 22),
-        ZIndex           = 92,
-        Parent           = card,
-    })
-    corner(badge, 6)
-    make("TextLabel", {
-        BackgroundTransparency = 1,
-        Size       = UDim2.new(1, 0, 1, 0),
-        Text       = nt.icon,
-        TextColor3 = T.White,
-        TextSize   = 13,
-        Font       = FONT_BOLD,
-        ZIndex     = 93,
-        Parent     = badge,
-    })
+    local badge=mk("Frame",{BackgroundColor3=n[1],
+        Position=UDim2.new(0,12,0.5,-11),
+        Size=UDim2.new(0,22,0,22), ZIndex=92, Parent=card})
+    rnd(badge,6)
+    mk("TextLabel",{BackgroundTransparency=1, Size=UDim2.new(1,0,1,0),
+        Text=n[2], TextColor3=T.White, TextSize=13, Font=FNB,
+        ZIndex=93, Parent=badge})
 
-    make("TextLabel", {
-        BackgroundTransparency = 1,
-        Position  = UDim2.new(0, 42, 0, 10),
-        Size      = UDim2.new(1, -52, 0, 18),
-        Text      = title,
-        TextColor3 = T.Text,
-        TextSize  = 13,
-        Font      = FONT_BOLD,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex    = 92,
-        Parent    = card,
-    })
-    make("TextLabel", {
-        BackgroundTransparency = 1,
-        Position  = UDim2.new(0, 42, 0, 29),
-        Size      = UDim2.new(1, -52, 0, 28),
-        Text      = msg or "",
-        TextColor3 = T.Muted,
-        TextSize  = 11,
-        Font      = FONT,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        TextWrapped    = true,
-        ZIndex    = 92,
-        Parent    = card,
-    })
+    mk("TextLabel",{BackgroundTransparency=1,
+        Position=UDim2.new(0,42,0,10), Size=UDim2.new(1,-52,0,18),
+        Text=title, TextColor3=T.Text, TextSize=13, Font=FNB,
+        TextXAlignment=Enum.TextXAlignment.Left, ZIndex=92, Parent=card})
+    mk("TextLabel",{BackgroundTransparency=1,
+        Position=UDim2.new(0,42,0,29), Size=UDim2.new(1,-52,0,28),
+        Text=msg or "", TextColor3=T.Muted, TextSize=11, Font=FN,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        TextWrapped=true, ZIndex=92, Parent=card})
 
-    -- progress bar depletes over duration
-    local prog = make("Frame", {
-        BackgroundColor3    = nt.col,
-        BackgroundTransparency = 0.4,
-        Position = UDim2.new(0, 0, 1, -3),
-        Size     = UDim2.new(1, 0, 0, 3),
-        ZIndex   = 93,
-        Parent   = card,
-    })
+    local prog=mk("Frame",{BackgroundColor3=n[1],
+        BackgroundTransparency=0.45,
+        Position=UDim2.new(0,0,1,-3),
+        Size=UDim2.new(1,0,0,3), ZIndex=93, Parent=card})
 
-    -- slide in
-    tw(card, { Position = UDim2.new(0, 0, 0, 0) }, SPD, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-    tw(prog, { Size = UDim2.new(0, 0, 0, 3) }, dur - 0.25, Enum.EasingStyle.Linear)
-
-    task.delay(dur, function()
-        tw(card, { Position = UDim2.new(1, 30, 0, 0) }, SPD)
-        task.delay(SPD + 0.05, function() card:Destroy() end)
+    tw(card,{Position=UDim2.new(0,0,0,0)}, S, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+    tw(prog,{Size=UDim2.new(0,0,0,3)}, dur-0.25, Enum.EasingStyle.Linear)
+    spawn(function()
+        wait(dur)
+        tw(card,{Position=UDim2.new(1,30,0,0)}, S)
+        wait(S+0.06); card:Destroy()
     end)
 end
 
--- ══════════════════════════════════════════════════════
+-- ══════════════════════════════════════════════════
 --  WATERMARK
--- ══════════════════════════════════════════════════════
-local WM = make("Frame", {
-    BackgroundColor3       = Color3.fromRGB(12, 12, 20),
-    BackgroundTransparency = 0.15,
-    Position               = UDim2.new(0, 12, 0, 12),
-    Size                   = UDim2.new(0, 220, 0, 28),
-    ZIndex                 = 20,
-    Parent                 = GUI,
+-- ══════════════════════════════════════════════════
+local WM = mk("Frame",{
+    BackgroundColor3=Color3.fromRGB(12,12,20),
+    BackgroundTransparency=0.15,
+    Position=UDim2.new(0,12,0,12),
+    Size=UDim2.new(0,214,0,27),
+    ZIndex=20, Parent=GUI,
 })
-corner(WM, 6)
-stroke(WM, T.Border, 1)
+rnd(WM,6); bdr(WM)
 
-local WM_DOT = make("Frame", {
-    BackgroundColor3 = T.Accent,
-    Position         = UDim2.new(0, 10, 0.5, -4),
-    Size             = UDim2.new(0, 8, 0, 8),
-    ZIndex           = 21,
-    Parent           = WM,
-})
-corner(WM_DOT, 4)
+local WMDOT = mk("Frame",{BackgroundColor3=T.Accent,
+    Position=UDim2.new(0,10,0.5,-4),
+    Size=UDim2.new(0,8,0,8), ZIndex=21, Parent=WM})
+rnd(WMDOT,4)
 
-make("TextLabel", {
-    BackgroundTransparency = 1,
-    Position  = UDim2.new(0, 26, 0, 0),
-    Size      = UDim2.new(1, -30, 1, 0),
-    Text      = "ScriptHub  •  " .. LocalPlayer.Name,
-    TextColor3 = T.Muted,
-    TextSize  = 11,
-    Font      = FONT,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    ZIndex    = 21,
-    Parent    = WM,
-})
+mk("TextLabel",{BackgroundTransparency=1,
+    Position=UDim2.new(0,26,0,0),
+    Size=UDim2.new(1,-30,1,0),
+    Text="ScriptHub  •  "..LP.Name,
+    TextColor3=T.Muted, TextSize=11, Font=FN,
+    TextXAlignment=Enum.TextXAlignment.Left,
+    ZIndex=21, Parent=WM})
 
--- watermark drag
-do
-    local drag, ds, sp = false, nil, nil
+do  -- watermark drag
+    local d,ds,sp=false
     WM.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 then
-            drag = true; ds = i.Position; sp = WM.Position
-        end
+        if i.UserInputType==Enum.UserInputType.MouseButton1 then
+            d=true; ds=i.Position; sp=WM.Position end
     end)
     UserInputService.InputChanged:Connect(function(i)
-        if drag and i.UserInputType == Enum.UserInputType.MouseMovement then
-            local d = i.Position - ds
-            WM.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X,
-                                    sp.Y.Scale, sp.Y.Offset + d.Y)
-        end
+        if d and i.UserInputType==Enum.UserInputType.MouseMovement then
+            local v=i.Position-ds
+            WM.Position=UDim2.new(sp.X.Scale,sp.X.Offset+v.X,
+                                   sp.Y.Scale,sp.Y.Offset+v.Y) end
     end)
     UserInputService.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = false end
+        if i.UserInputType==Enum.UserInputType.MouseButton1 then d=false end
     end)
 end
 
--- pulse dot
 RunService.Heartbeat:Connect(function()
-    local a = math.abs(math.sin(tick() * math.pi * 0.6))
-    WM_DOT.BackgroundTransparency = 0.1 + a * 0.6
+    WMDOT.BackgroundTransparency = 0.1 + math.abs(math.sin(tick()*math.pi*0.55))*0.65
 end)
 
--- ══════════════════════════════════════════════════════
+-- ══════════════════════════════════════════════════
 --  MAIN WINDOW
--- ══════════════════════════════════════════════════════
-local WIN = make("Frame", {
-    Name             = "Window",
-    AnchorPoint      = Vector2.new(0.5, 0.5),
-    BackgroundColor3 = T.BG,
-    Position         = UDim2.new(0.5, 0, 0.5, 0),
-    Size             = UDim2.new(0, 610, 0, 460),
-    ZIndex           = 10,
-    ClipsDescendants = true,
-    Parent           = GUI,
+--  Layout: 600 × 450
+--  Titlebar  : y=0   h=50
+--  Sidebar   : x=0   w=152  y=50 h=368
+--  Content   : x=152 w=448  y=50 h=368
+--  Status bar: y=418 h=32
+-- ══════════════════════════════════════════════════
+local WIN = mk("Frame",{
+    Name="Window", AnchorPoint=Vector2.new(0.5,0.5),
+    BackgroundColor3=T.BG,
+    Position=UDim2.new(0.5,0,0.5,0),
+    Size=UDim2.new(0,600,0,450),
+    ZIndex=10, ClipsDescendants=true, Parent=GUI,
 })
-corner(WIN, 14)
-stroke(WIN, T.Border, 1)
-grad(WIN, Color3.fromRGB(18, 12, 34), T.BG, 145)
+rnd(WIN,12); bdr(WIN)
+grd(WIN, Color3.fromRGB(18,12,34), T.BG, 145)
 
--- outer glow
-make("ImageLabel", {
-    AnchorPoint        = Vector2.new(0.5, 0.5),
-    BackgroundTransparency = 1,
-    Position           = UDim2.new(0.5, 0, 0.5, 4),
-    Size               = UDim2.new(1, 46, 1, 46),
-    ZIndex             = 9,
-    Image              = "rbxassetid://6014261993",
-    ImageColor3        = T.Accent,
-    ImageTransparency  = 0.80,
-    ScaleType          = Enum.ScaleType.Slice,
-    SliceCenter        = Rect.new(49, 49, 450, 450),
-    Parent             = WIN,
+-- ── Title Bar ──────────────────────────────────────
+local TB = mk("Frame",{
+    BackgroundColor3=T.Surface,
+    Size=UDim2.new(1,0,0,50),
+    ZIndex=11, Parent=WIN,
 })
-
--- ── Title Bar ─────────────────────────────────────────
-local TITLEBAR = make("Frame", {
-    BackgroundColor3 = T.Surface,
-    Size             = UDim2.new(1, 0, 0, 50),
-    ZIndex           = 12,
-    Parent           = WIN,
-})
-corner(TITLEBAR, 14)
-make("Frame", {  -- fill rounded bottom corners
-    BackgroundColor3 = T.Surface,
-    Position = UDim2.new(0, 0, 0.5, 0),
-    Size     = UDim2.new(1, 0, 0.5, 0),
-    ZIndex   = 12, Parent = TITLEBAR,
-})
-grad(TITLEBAR, Color3.fromRGB(20, 14, 38), T.Surface, 0)
+rnd(TB,12)
+-- fill bottom-rounded-corners of titlebar so it blends
+mk("Frame",{BackgroundColor3=T.Surface,
+    Position=UDim2.new(0,0,0.5,0),
+    Size=UDim2.new(1,0,0.5,0),
+    ZIndex=11, Parent=TB})
+grd(TB, Color3.fromRGB(20,14,38), T.Surface, 0)
 
 -- accent underline
-local TITLE_LINE = make("Frame", {
-    BackgroundColor3 = T.Accent,
-    Position = UDim2.new(0, 0, 1, -2),
-    Size     = UDim2.new(1, 0, 0, 2),
-    ZIndex   = 14, Parent = TITLEBAR,
-})
-grad(TITLE_LINE, T.AccentLight, T.AccentDark, 0)
-
--- periodic shimmer sweep
-local shimmer = make("Frame", {
-    BackgroundColor3       = T.White,
-    BackgroundTransparency = 0.93,
-    Position = UDim2.new(-0.12, 0, 0, 0),
-    Size     = UDim2.new(0.12, 0, 1, 0),
-    ZIndex   = 15, Parent = TITLEBAR,
-})
-local function shimmerLoop()
-    shimmer.Position = UDim2.new(-0.12, 0, 0, 0)
-    tw(shimmer, { Position = UDim2.new(1.12, 0, 0, 0) }, 2.5, Enum.EasingStyle.Linear)
-    task.delay(5, shimmerLoop)
-end
-task.delay(1.5, shimmerLoop)
+local ALINE = mk("Frame",{BackgroundColor3=T.Accent,
+    Position=UDim2.new(0,0,1,-2),
+    Size=UDim2.new(1,0,0,2), ZIndex=12, Parent=TB})
+grd(ALINE, T.AccentL, T.AccentD, 0)
 
 -- logo badge
-local LOGO = make("Frame", {
-    BackgroundColor3 = T.Accent,
-    Position = UDim2.new(0, 14, 0.5, -15),
-    Size     = UDim2.new(0, 30, 0, 30),
-    ZIndex   = 14, Parent = TITLEBAR,
-})
-corner(LOGO, 9)
-grad(LOGO, T.AccentLight, T.AccentDark, 135)
-make("TextLabel", {
-    BackgroundTransparency = 1,
-    Size       = UDim2.new(1, 0, 1, 0),
-    Text       = "S",
-    TextColor3 = T.White,
-    TextSize   = 17,
-    Font       = FONT_BOLD,
-    ZIndex     = 15, Parent = LOGO,
+local LOGO = mk("Frame",{BackgroundColor3=T.Accent,
+    Position=UDim2.new(0,14,0.5,-14),
+    Size=UDim2.new(0,28,0,28), ZIndex=12, Parent=TB})
+rnd(LOGO,8); grd(LOGO, T.AccentL, T.AccentD, 135)
+mk("TextLabel",{BackgroundTransparency=1,
+    Size=UDim2.new(1,0,1,0), Text="S",
+    TextColor3=T.White, TextSize=16, Font=FNB,
+    ZIndex=13, Parent=LOGO})
+
+-- title / subtitle
+mk("TextLabel",{BackgroundTransparency=1,
+    Position=UDim2.new(0,50,0,7), Size=UDim2.new(0,180,0,19),
+    Text="ScriptHub", TextColor3=T.Text, TextSize=15, Font=FNB,
+    TextXAlignment=Enum.TextXAlignment.Left, ZIndex=12, Parent=TB})
+mk("TextLabel",{BackgroundTransparency=1,
+    Position=UDim2.new(0,50,0,27), Size=UDim2.new(0,180,0,14),
+    Text="v1.0  •  Free", TextColor3=T.Muted, TextSize=10, Font=FN,
+    TextXAlignment=Enum.TextXAlignment.Left, ZIndex=12, Parent=TB})
+
+-- ┌─ Window controls ─────────────────────────────┐
+--  ZIndex 14 so they sit ABOVE the drag handle (13)
+local CBTN = mk("TextButton",{
+    AnchorPoint=Vector2.new(1,0.5),
+    BackgroundColor3=T.Red,
+    Position=UDim2.new(1,-14,0.5,0),
+    Size=UDim2.new(0,13,0,13),
+    Text="", ZIndex=14, Parent=TB})
+rnd(CBTN,7)
+CBTN.MouseEnter:Connect(function() tw(CBTN,{BackgroundTransparency=0.35},SF) end)
+CBTN.MouseLeave:Connect(function() tw(CBTN,{BackgroundTransparency=0},SF) end)
+
+local MBTN = mk("TextButton",{
+    AnchorPoint=Vector2.new(1,0.5),
+    BackgroundColor3=T.Yellow,
+    Position=UDim2.new(1,-34,0.5,0),
+    Size=UDim2.new(0,13,0,13),
+    Text="", ZIndex=14, Parent=TB})
+rnd(MBTN,7)
+MBTN.MouseEnter:Connect(function() tw(MBTN,{BackgroundTransparency=0.35},SF) end)
+MBTN.MouseLeave:Connect(function() tw(MBTN,{BackgroundTransparency=0},SF) end)
+
+-- ┌─ Drag handle ──────────────────────────────────┐
+--  Transparent TextButton covering the title bar,
+--  stops before the control buttons (right ~55px).
+--  ZIndex 13 = above decorations (12) but below
+--  controls (14), so controls still receive clicks.
+local DRAG = mk("TextButton",{
+    BackgroundTransparency=1,
+    Size=UDim2.new(1,-55,1,0),
+    Text="", ZIndex=13, Parent=TB,
 })
 
-make("TextLabel", {
-    BackgroundTransparency = 1,
-    Position  = UDim2.new(0, 54, 0, 7),
-    Size      = UDim2.new(0.5, 0, 0, 20),
-    Text      = "ScriptHub",
-    TextColor3 = T.Text,
-    TextSize  = 15,
-    Font      = FONT_BOLD,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    ZIndex    = 14, Parent = TITLEBAR,
-})
-make("TextLabel", {
-    BackgroundTransparency = 1,
-    Position  = UDim2.new(0, 54, 0, 28),
-    Size      = UDim2.new(0.5, 0, 0, 14),
-    Text      = "v1.0  •  Free",
-    TextColor3 = T.Muted,
-    TextSize  = 10,
-    Font      = FONT,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    ZIndex    = 14, Parent = TITLEBAR,
-})
-
--- controls
-local CTRL = make("Frame", {
-    BackgroundTransparency = 1,
-    AnchorPoint = Vector2.new(1, 0.5),
-    Position    = UDim2.new(1, -14, 0.5, 0),
-    Size        = UDim2.new(0, 72, 0, 18),
-    ZIndex      = 14, Parent = TITLEBAR,
-})
-make("UIListLayout", {
-    FillDirection       = Enum.FillDirection.Horizontal,
-    HorizontalAlignment = Enum.HorizontalAlignment.Right,
-    VerticalAlignment   = Enum.VerticalAlignment.Center,
-    Padding             = UDim.new(0, 7),
-    Parent              = CTRL,
-})
-
-local function ctrlBtn(col)
-    local b = make("TextButton", {
-        BackgroundColor3 = col,
-        Size  = UDim2.new(0, 14, 0, 14),
-        Text  = "",
-        ZIndex = 15, Parent = CTRL,
-    })
-    corner(b, 7)
-    b.MouseEnter:Connect(function() tw(b, {BackgroundTransparency=0.3}, SPD_FAST) end)
-    b.MouseLeave:Connect(function() tw(b, {BackgroundTransparency=0},   SPD_FAST) end)
-    return b
+do  -- drag logic uses UserInputService for movement
+    local drag=false; local ds; local wp
+    DRAG.MouseButton1Down:Connect(function()
+        drag=true
+        ds=UserInputService:GetMouseLocation()
+        wp=WIN.Position
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.MouseButton1 then
+            drag=false end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if drag and i.UserInputType==Enum.UserInputType.MouseMovement then
+            local d=UserInputService:GetMouseLocation()-ds
+            WIN.Position=UDim2.new(wp.X.Scale, wp.X.Offset+d.X,
+                                    wp.Y.Scale, wp.Y.Offset+d.Y)
+        end
+    end)
 end
-local BTN_CLOSE    = ctrlBtn(Color3.fromRGB(255, 70, 70))
-local BTN_MINIMIZE = ctrlBtn(Color3.fromRGB(255, 185, 45))
 
--- ── Sidebar ───────────────────────────────────────────
-local SIDEBAR = make("Frame", {
-    BackgroundColor3 = T.Surface,
-    Position = UDim2.new(0, 0, 0, 50),
-    Size     = UDim2.new(0, 158, 1, -82),  -- leaves space for status bar
-    ZIndex   = 11, Parent = WIN,
+-- ── Sidebar ────────────────────────────────────────
+local SB = mk("Frame",{
+    BackgroundColor3=T.Surface,
+    Position=UDim2.new(0,0,0,50),
+    Size=UDim2.new(0,152,0,368),    -- 50+368+32 = 450 ✓
+    ZIndex=11, Parent=WIN,
 })
-make("Frame", {
-    BackgroundColor3 = T.Border,
-    AnchorPoint = Vector2.new(1, 0),
-    Position    = UDim2.new(1, 0, 0, 0),
-    Size        = UDim2.new(0, 1, 1, 0),
-    ZIndex      = 12, Parent = SIDEBAR,
-})
-grad(SIDEBAR, T.Surface, Color3.fromRGB(13, 13, 22), 90)
+grd(SB, T.Surface, Color3.fromRGB(13,13,22), 90)
+mk("Frame",{BackgroundColor3=T.Border,  -- right separator
+    AnchorPoint=Vector2.new(1,0),
+    Position=UDim2.new(1,0,0,0),
+    Size=UDim2.new(0,1,1,0),
+    ZIndex=12, Parent=SB})
 
-local TAB_LIST = make("Frame", {
-    BackgroundTransparency = 1,
-    Size   = UDim2.new(1, 0, 1, 0),
-    ZIndex = 12, Parent = SIDEBAR,
-})
-make("UIListLayout", {
-    FillDirection = Enum.FillDirection.Vertical,
-    Padding       = UDim.new(0, 3),
-    Parent        = TAB_LIST,
-})
-pad(TAB_LIST, 10, 10, 10, 10)
+-- tab indicator pill (slides between tabs)
+local IND = mk("Frame",{BackgroundColor3=T.Accent,
+    Size=UDim2.new(0,3,0,28),
+    Position=UDim2.new(0,0,0,18),
+    ZIndex=14, Parent=SB})
+rnd(IND,2)
 
--- indicator pill
-local TAB_IND = make("Frame", {
-    BackgroundColor3 = T.Accent,
-    Position = UDim2.new(0, 0, 0, 20),
-    Size     = UDim2.new(0, 3, 0, 30),
-    ZIndex   = 16, Parent = SIDEBAR,
+-- tab list (all buttons go here)
+local TLIST = mk("Frame",{
+    BackgroundTransparency=1,
+    Size=UDim2.new(1,0,1,0),
+    ZIndex=12, Parent=SB,
 })
-corner(TAB_IND, 2)
-
--- ── Content Area ──────────────────────────────────────
-local CONTENT = make("Frame", {
-    BackgroundTransparency = 1,
-    Position = UDim2.new(0, 158, 0, 50),
-    Size     = UDim2.new(1, -158, 1, -82),
-    ZIndex   = 11, Parent = WIN,
+do
+    local u=Instance.new("UIPadding")
+    u.PaddingTop=UDim.new(0,10); u.PaddingBottom=UDim.new(0,10)
+    u.PaddingLeft=UDim.new(0,9); u.PaddingRight=UDim.new(0,9)
+    u.Parent=TLIST
+end
+mk("UIListLayout",{
+    FillDirection=Enum.FillDirection.Vertical,
+    Padding=UDim.new(0,3), Parent=TLIST,
 })
 
--- ── Status Bar ────────────────────────────────────────
-local STATUSBAR = make("Frame", {
-    BackgroundColor3 = T.StatusBG,
-    AnchorPoint = Vector2.new(0, 1),
-    Position    = UDim2.new(0, 0, 1, 0),
-    Size        = UDim2.new(1, 0, 0, 32),
-    ZIndex      = 12, Parent = WIN,
-})
-make("Frame", {  -- top border line
-    BackgroundColor3 = T.Border,
-    Size = UDim2.new(1, 0, 0, 1),
-    ZIndex = 13, Parent = STATUSBAR,
+-- ── Content area ───────────────────────────────────
+local CA = mk("Frame",{
+    BackgroundTransparency=1,
+    Position=UDim2.new(0,152,0,50),
+    Size=UDim2.new(0,448,0,368),
+    ZIndex=11, Parent=WIN,
 })
 
-local FPS_LBL = make("TextLabel", {
-    BackgroundTransparency = 1,
-    Position  = UDim2.new(0, 14, 0, 0),
-    Size      = UDim2.new(0, 72, 1, 0),
-    Text      = "FPS: --",
-    TextColor3 = T.Muted,
-    TextSize  = 10,
-    Font      = FONT,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    ZIndex    = 13, Parent = STATUSBAR,
+-- ── Status bar ─────────────────────────────────────
+local STAT = mk("Frame",{
+    BackgroundColor3=T.StatBG,
+    Position=UDim2.new(0,0,0,418),
+    Size=UDim2.new(1,0,0,32),
+    ZIndex=12, Parent=WIN,
 })
+mk("Frame",{BackgroundColor3=T.Border,
+    Size=UDim2.new(1,0,0,1),
+    ZIndex=13, Parent=STAT})
 
-local ACTIVE_LBL = make("TextLabel", {
-    BackgroundTransparency = 1,
-    Position  = UDim2.new(0, 92, 0, 0),
-    Size      = UDim2.new(0, 130, 1, 0),
-    Text      = "○  0 active",
-    TextColor3 = T.Muted,
-    TextSize  = 10,
-    Font      = FONT,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    ZIndex    = 13, Parent = STATUSBAR,
-})
+local FPS_LBL = mk("TextLabel",{BackgroundTransparency=1,
+    Position=UDim2.new(0,12,0,0), Size=UDim2.new(0,72,1,0),
+    Text="FPS: --", TextColor3=T.Muted, TextSize=10, Font=FN,
+    TextXAlignment=Enum.TextXAlignment.Left, ZIndex=13, Parent=STAT})
 
-make("TextLabel", {
-    BackgroundTransparency = 1,
-    AnchorPoint = Vector2.new(1, 0.5),
-    Position    = UDim2.new(1, -14, 0.5, 0),
-    Size        = UDim2.new(0, 120, 1, 0),
-    Text        = "INSERT  to toggle",
-    TextColor3  = T.Muted,
-    TextSize    = 10,
-    Font        = FONT,
-    TextXAlignment = Enum.TextXAlignment.Right,
-    ZIndex      = 13, Parent = STATUSBAR,
-})
+local ACT_LBL = mk("TextLabel",{BackgroundTransparency=1,
+    Position=UDim2.new(0,88,0,0), Size=UDim2.new(0,130,1,0),
+    Text="○  0 active", TextColor3=T.Muted, TextSize=10, Font=FN,
+    TextXAlignment=Enum.TextXAlignment.Left, ZIndex=13, Parent=STAT})
+
+mk("TextLabel",{BackgroundTransparency=1,
+    AnchorPoint=Vector2.new(1,0.5),
+    Position=UDim2.new(1,-12,0.5,0), Size=UDim2.new(0,120,1,0),
+    Text="INSERT  to toggle", TextColor3=T.Muted,
+    TextSize=10, Font=FN,
+    TextXAlignment=Enum.TextXAlignment.Right,
+    ZIndex=13, Parent=STAT})
 
 -- FPS counter
-local fpsArr = {}
-RunService.Heartbeat:Connect(function(dt)
-    table.insert(fpsArr, 1 / dt)
-    if #fpsArr > 30 then table.remove(fpsArr, 1) end
-    local sum = 0
-    for _, v in ipairs(fpsArr) do sum = sum + v end
-    local fps = math.round(sum / #fpsArr)
-    FPS_LBL.Text = "FPS: " .. fps
-    FPS_LBL.TextColor3 = fps >= 55 and T.Success or fps >= 30 and T.Warning or T.Danger
-end)
-
-local activeCount = 0
-local function changeActive(delta)
-    activeCount = math.max(0, activeCount + delta)
-    ACTIVE_LBL.Text      = (activeCount > 0 and "●  " or "○  ") .. activeCount .. " active"
-    ACTIVE_LBL.TextColor3 = activeCount > 0 and T.AccentLight or T.Muted
+do
+    local buf={}
+    RunService.Heartbeat:Connect(function(dt)
+        buf[#buf+1]=1/dt
+        if #buf>30 then table.remove(buf,1) end
+        local s=0; for _,v in ipairs(buf) do s=s+v end
+        local f=math.round(s/#buf)
+        FPS_LBL.Text="FPS: "..f
+        FPS_LBL.TextColor3 = f>=55 and T.Green or f>=30 and T.Yellow or T.Red
+    end)
 end
 
--- ══════════════════════════════════════════════════════
---  TAB SYSTEM
--- ══════════════════════════════════════════════════════
-local Tabs      = {}
-local ActiveTab = nil
+local activeN=0
+local function setActive(d)
+    activeN=math.max(0,activeN+d)
+    ACT_LBL.Text=(activeN>0 and "●  " or "○  ")..activeN.." active"
+    ACT_LBL.TextColor3=activeN>0 and T.AccentL or T.Muted
+end
 
-local TAB_DEFS = {
-    { id = "Main",   label = "Main",   icon = "▸" },
-    { id = "Visual", label = "Visual", icon = "◈" },
-    { id = "World",  label = "World",  icon = "◉" },
-    { id = "Player", label = "Player", icon = "◎" },
-    { id = "Misc",   label = "Misc",   icon = "⊞" },
+-- ══════════════════════════════════════════════════
+--  TAB SYSTEM
+-- ══════════════════════════════════════════════════
+local BTN_H = 36   -- tab button height
+local BTN_G = 3    -- gap between buttons
+local PAD_T = 10   -- top padding of TLIST
+local IND_H = 28
+
+local function indY(idx)   -- indicator Y for tab index
+    return PAD_T + idx*(BTN_H+BTN_G) + (BTN_H-IND_H)/2
+end
+
+local Tabs={}; local CurTab=nil
+
+local function switchTab(id)
+    local tab=Tabs[id]
+    if not tab or CurTab==id then return end
+    if CurTab then
+        local old=Tabs[CurTab]
+        tw(old.btn,{BackgroundTransparency=1,BackgroundColor3=T.Card}, S)
+        tw(old.ico,{TextColor3=T.Muted}, S)
+        tw(old.lbl,{TextColor3=T.Muted}, S)
+        old.page.Visible=false
+    end
+    CurTab=id
+    tw(tab.btn,{BackgroundTransparency=0,
+        BackgroundColor3=Color3.fromRGB(28,18,54)}, S)
+    tw(tab.ico,{TextColor3=T.AccentL}, S)
+    tw(tab.lbl,{TextColor3=T.Text}, S)
+    tab.page.Visible=true
+    tw(IND,{Position=UDim2.new(0,0,0,indY(tab.idx))}, S)
+end
+
+local TDEFS={
+    {id="Main",   lbl="Main",   ico="▸"},
+    {id="Visual", lbl="Visual", ico="◈"},
+    {id="World",  lbl="World",  ico="◉"},
+    {id="Player", lbl="Player", ico="◎"},
+    {id="Misc",   lbl="Misc",   ico="⊞"},
 }
 
-local function setTab(id)
-    local tab = Tabs[id]
-    if not tab or ActiveTab == id then return end
+for i,def in ipairs(TDEFS) do
+    local idx=i-1
 
-    if ActiveTab then
-        local old = Tabs[ActiveTab]
-        tw(old.btn,  { BackgroundTransparency = 1, BackgroundColor3 = T.Card }, SPD)
-        tw(old.icon, { TextColor3 = T.Muted }, SPD)
-        tw(old.lbl,  { TextColor3 = T.Muted }, SPD)
-        old.page.Visible = false
+    local btn=mk("TextButton",{
+        BackgroundColor3=T.Card,
+        BackgroundTransparency=1,
+        Size=UDim2.new(1,0,0,BTN_H),
+        Text="", ZIndex=12, Parent=TLIST,
+    }); rnd(btn,6)
+
+    local ico=mk("TextLabel",{BackgroundTransparency=1,
+        Position=UDim2.new(0,8,0,0), Size=UDim2.new(0,20,1,0),
+        Text=def.ico, TextColor3=T.Muted, TextSize=13, Font=FN,
+        ZIndex=13, Parent=btn})
+
+    local lbl=mk("TextLabel",{BackgroundTransparency=1,
+        Position=UDim2.new(0,32,0,0), Size=UDim2.new(1,-32,1,0),
+        Text=def.lbl, TextColor3=T.Muted, TextSize=12, Font=FN,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        ZIndex=13, Parent=btn})
+
+    -- scroll page (visible area for tab content)
+    local page=mk("Frame",{
+        BackgroundTransparency=1,
+        Size=UDim2.new(1,0,1,0),
+        Visible=false, ZIndex=12, Parent=CA,
+    })
+    local scroll=mk("ScrollingFrame",{
+        BackgroundTransparency=1,
+        Size=UDim2.new(1,0,1,0),
+        ScrollBarThickness=3,
+        ScrollBarImageColor3=T.Accent,
+        CanvasSize=UDim2.new(0,0,0,0),
+        AutomaticCanvasSize=Enum.AutomaticSize.Y,
+        ZIndex=12, Parent=page,
+    })
+    do
+        local u=Instance.new("UIPadding")
+        u.PaddingTop=UDim.new(0,12); u.PaddingBottom=UDim.new(0,12)
+        u.PaddingLeft=UDim.new(0,12); u.PaddingRight=UDim.new(0,14)
+        u.Parent=scroll
     end
-
-    ActiveTab       = id
-    tab.page.Visible = true
-    tw(tab.btn,  { BackgroundTransparency = 0, BackgroundColor3 = Color3.fromRGB(28, 20, 52) }, SPD)
-    tw(tab.icon, { TextColor3 = T.AccentLight }, SPD)
-    tw(tab.lbl,  { TextColor3 = T.Text }, SPD)
-
-    local btnY = tab.btn.AbsolutePosition.Y - SIDEBAR.AbsolutePosition.Y
-    local btnH = tab.btn.AbsoluteSize.Y
-    tw(TAB_IND, { Position = UDim2.new(0, 0, 0, btnY + (btnH - 30) / 2) }, SPD)
-end
-
-local function newTab(def)
-    local btn = make("TextButton", {
-        BackgroundColor3       = T.Card,
-        BackgroundTransparency = 1,
-        Size   = UDim2.new(1, 0, 0, 38),
-        Text   = "",
-        ZIndex = 13, Parent = TAB_LIST,
-    })
-    corner(btn, 7)
-
-    local ico = make("TextLabel", {
-        BackgroundTransparency = 1,
-        Position  = UDim2.new(0, 10, 0, 0),
-        Size      = UDim2.new(0, 22, 1, 0),
-        Text      = def.icon,
-        TextColor3 = T.Muted,
-        TextSize  = 14,
-        Font      = FONT,
-        ZIndex    = 14, Parent = btn,
-    })
-    local lbl = make("TextLabel", {
-        BackgroundTransparency = 1,
-        Position  = UDim2.new(0, 36, 0, 0),
-        Size      = UDim2.new(1, -36, 1, 0),
-        Text      = def.label,
-        TextColor3 = T.Muted,
-        TextSize  = 13,
-        Font      = FONT,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex    = 14, Parent = btn,
+    mk("UIListLayout",{
+        FillDirection=Enum.FillDirection.Vertical,
+        Padding=UDim.new(0,9),
+        SortOrder=Enum.SortOrder.LayoutOrder,
+        Parent=scroll,
     })
 
-    -- page wrapper
-    local page = make("Frame", {
-        BackgroundTransparency = 1,
-        Size    = UDim2.new(1, 0, 1, 0),
-        Visible = false,
-        ZIndex  = 12, Parent = CONTENT,
-    })
+    Tabs[def.id]={btn=btn,ico=ico,lbl=lbl,page=page,scroll=scroll,idx=idx}
 
-    local scroll = make("ScrollingFrame", {
-        BackgroundTransparency = 1,
-        Size                   = UDim2.new(1, 0, 1, 0),
-        ScrollBarThickness     = 3,
-        ScrollBarImageColor3   = T.Accent,
-        CanvasSize             = UDim2.new(0, 0, 0, 0),
-        AutomaticCanvasSize    = Enum.AutomaticSize.Y,
-        ZIndex                 = 12, Parent = page,
-    })
-    pad(scroll, 14, 14, 14, 14)
-    make("UIListLayout", {
-        FillDirection = Enum.FillDirection.Vertical,
-        Padding       = UDim.new(0, 10),
-        SortOrder     = Enum.SortOrder.LayoutOrder,
-        Parent        = scroll,
-    })
-
-    Tabs[def.id] = { btn = btn, icon = ico, lbl = lbl, page = page, scroll = scroll }
-
-    btn.MouseButton1Click:Connect(function() setTab(def.id) end)
+    btn.MouseButton1Click:Connect(function() switchTab(def.id) end)
     btn.MouseEnter:Connect(function()
-        if ActiveTab ~= def.id then tw(btn, {BackgroundTransparency=0.88}, SPD_FAST) end
+        if CurTab~=def.id then
+            tw(btn,{BackgroundTransparency=0.85},SF) end
     end)
     btn.MouseLeave:Connect(function()
-        if ActiveTab ~= def.id then tw(btn, {BackgroundTransparency=1},    SPD_FAST) end
+        if CurTab~=def.id then
+            tw(btn,{BackgroundTransparency=1},SF) end
     end)
 end
 
-for _, d in ipairs(TAB_DEFS) do newTab(d) end
-
--- ══════════════════════════════════════════════════════
+-- ══════════════════════════════════════════════════
 --  COMPONENT BUILDERS
--- ══════════════════════════════════════════════════════
+-- ══════════════════════════════════════════════════
 
--- Section card
-local function section(parent, title)
-    local wrap = make("Frame", {
-        BackgroundColor3 = T.Card,
-        Size             = UDim2.new(1, 0, 0, 0),
-        AutomaticSize    = Enum.AutomaticSize.Y,
-        ZIndex           = 13, Parent = parent,
-    })
-    corner(wrap, 9)
-    stroke(wrap, T.Border, 1)
+-- Section card — returns the items Frame
+local function sec(parent, title)
+    local card=mk("Frame",{
+        BackgroundColor3=T.Card,
+        Size=UDim2.new(1,0,0,0),
+        AutomaticSize=Enum.AutomaticSize.Y,
+        ZIndex=13, Parent=parent,
+    }); rnd(card,8); bdr(card,T.Border)
 
-    local hdr = make("Frame", {
-        BackgroundTransparency = 1,
-        Size   = UDim2.new(1, 0, 0, 32),
-        ZIndex = 14, Parent = wrap,
-    })
-    local pill = make("Frame", {
-        BackgroundColor3 = T.Accent,
-        Position = UDim2.new(0, 12, 0.5, -7),
-        Size     = UDim2.new(0, 3, 0, 14),
-        ZIndex   = 15, Parent = hdr,
-    })
-    corner(pill, 2)
-    make("TextLabel", {
-        BackgroundTransparency = 1,
-        Position  = UDim2.new(0, 22, 0, 0),
-        Size      = UDim2.new(1, -22, 1, 0),
-        Text      = title,
-        TextColor3 = T.Muted,
-        TextSize  = 10,
-        Font      = FONT_BOLD,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex    = 15, Parent = hdr,
-    })
+    -- header row (32px)
+    local hdr=mk("Frame",{BackgroundTransparency=1,
+        Position=UDim2.new(0,0,0,0),
+        Size=UDim2.new(1,0,0,32),
+        ZIndex=14, Parent=card})
+    local pill=mk("Frame",{BackgroundColor3=T.Accent,
+        Position=UDim2.new(0,10,0.5,-7),
+        Size=UDim2.new(0,3,0,14),
+        ZIndex=15, Parent=hdr}); rnd(pill,2)
+    mk("TextLabel",{BackgroundTransparency=1,
+        Position=UDim2.new(0,20,0,0),
+        Size=UDim2.new(1,-20,1,0),
+        Text=title, TextColor3=T.Muted, TextSize=10, Font=FNB,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        ZIndex=15, Parent=hdr})
 
-    local items = make("Frame", {
-        BackgroundTransparency = 1,
-        Position  = UDim2.new(0, 0, 0, 32),
-        Size      = UDim2.new(1, 0, 0, 0),
-        AutomaticSize = Enum.AutomaticSize.Y,
-        ZIndex    = 14, Parent = wrap,
-    })
-    make("UIListLayout", {
-        FillDirection = Enum.FillDirection.Vertical,
-        Padding       = UDim.new(0, 2),
-        Parent        = items,
-    })
-    pad(items, 0, 10, 10, 10)
-    return items
+    -- separator line
+    mk("Frame",{BackgroundColor3=T.Border,
+        Position=UDim2.new(0,0,0,31),
+        Size=UDim2.new(1,0,0,1),
+        ZIndex=14, Parent=card})
+
+    -- items container (starts below header + sep)
+    local items=mk("Frame",{BackgroundTransparency=1,
+        Position=UDim2.new(0,8,0,36),
+        Size=UDim2.new(1,-16,0,0),
+        AutomaticSize=Enum.AutomaticSize.Y,
+        ZIndex=14, Parent=card})
+    mk("UIListLayout",{
+        FillDirection=Enum.FillDirection.Vertical,
+        Padding=UDim.new(0,3),
+        SortOrder=Enum.SortOrder.LayoutOrder,
+        Parent=items})
+    -- 10px bottom padding via a spacer
+    local _ord=0
+    local function nextOrd() _ord=_ord+1; return _ord end
+    return items, nextOrd
 end
 
--- Base row (shared chrome + hover)
-local function baseRow(parent, h)
-    local row = make("Frame", {
-        BackgroundColor3 = T.Surface,
-        Size             = UDim2.new(1, 0, 0, h or 46),
-        ZIndex           = 15, Parent = parent,
+-- Base row (surface card + hover glow)
+local function row(parent, h)
+    local r=mk("Frame",{
+        BackgroundColor3=T.Surface,
+        Size=UDim2.new(1,0,0,h or 46),
+        ZIndex=15, Parent=parent,
+    }); rnd(r,6); bdr(r,Color3.fromRGB(28,28,46))
+    -- hover: use a full-cover transparent button that sits BELOW
+    -- interactive children; it only handles enter/leave, not clicks
+    local hov=mk("TextButton",{
+        BackgroundTransparency=1,
+        Size=UDim2.new(1,0,1,0),
+        Text="", ZIndex=15, Parent=r,
     })
-    corner(row, 7)
-    stroke(row, Color3.fromRGB(28, 28, 46), 1)
-
-    local hit = make("Frame", {
-        BackgroundTransparency = 1,
-        Size   = UDim2.new(1, 0, 1, 0),
-        ZIndex = 14, Parent = row,
-    })
-    hit.MouseEnter:Connect(function() tw(row, {BackgroundColor3=T.CardHover}, SPD_FAST) end)
-    hit.MouseLeave:Connect(function() tw(row, {BackgroundColor3=T.Surface},   SPD_FAST) end)
-
-    return row
+    hov.MouseEnter:Connect(function() tw(r,{BackgroundColor3=T.CardH},SF) end)
+    hov.MouseLeave:Connect(function() tw(r,{BackgroundColor3=T.Surface},SF) end)
+    return r
 end
 
-local function rowLabels(row, name, desc, yOff)
-    make("TextLabel", {
-        BackgroundTransparency = 1,
-        Position  = UDim2.new(0, 13, 0, yOff or (desc and 5 or 13)),
-        Size      = UDim2.new(0.62, 0, 0, 18),
-        Text      = name,
-        TextColor3 = T.Text,
-        TextSize  = 13,
-        Font      = FONT,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex    = 16, Parent = row,
-    })
+-- name + optional desc labels in a row
+local function rowLbls(r, name, desc)
+    mk("TextLabel",{BackgroundTransparency=1,
+        Position=UDim2.new(0,12,0,desc and 5 or 13),
+        Size=UDim2.new(0.6,0,0,18),
+        Text=name, TextColor3=T.Text, TextSize=13, Font=FN,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        ZIndex=17, Parent=r})
     if desc then
-        make("TextLabel", {
-            BackgroundTransparency = 1,
-            Position  = UDim2.new(0, 13, 0, 24),
-            Size      = UDim2.new(0.62, 0, 0, 14),
-            Text      = desc,
-            TextColor3 = T.Muted,
-            TextSize  = 10,
-            Font      = FONT,
-            TextXAlignment = Enum.TextXAlignment.Left,
-            ZIndex    = 16, Parent = row,
-        })
+        mk("TextLabel",{BackgroundTransparency=1,
+            Position=UDim2.new(0,12,0,24),
+            Size=UDim2.new(0.6,0,0,14),
+            Text=desc, TextColor3=T.Muted, TextSize=10, Font=FN,
+            TextXAlignment=Enum.TextXAlignment.Left,
+            ZIndex=17, Parent=r})
     end
 end
 
--- ── Button ────────────────────────────────────────────
-local function addButton(parent, name, desc, cb)
-    local row = baseRow(parent, 46)
-    rowLabels(row, name, desc)
+-- ── Button ─────────────────────────────────────────
+local function addBtn(parent, name, desc, cb)
+    local r=row(parent,46); rowLbls(r,name,desc)
 
-    local btn = make("TextButton", {
-        AnchorPoint      = Vector2.new(1, 0.5),
-        BackgroundColor3 = T.Accent,
-        Position         = UDim2.new(1, -12, 0.5, 0),
-        Size             = UDim2.new(0, 80, 0, 28),
-        Text             = "Run",
-        TextColor3       = T.White,
-        TextSize         = 12,
-        Font             = FONT_BOLD,
-        ZIndex           = 17, Parent = row,
-    })
-    corner(btn, 7)
-    grad(btn, T.AccentLight, T.AccentDark, 90)
+    local b=mk("TextButton",{
+        AnchorPoint=Vector2.new(1,0.5),
+        BackgroundColor3=T.Accent,
+        Position=UDim2.new(1,-11,0.5,0),
+        Size=UDim2.new(0,76,0,27),
+        Text="Run", TextColor3=T.White,
+        TextSize=12, Font=FNB, ZIndex=18, Parent=r,
+    }); rnd(b,6); grd(b, T.AccentL, T.AccentD, 90)
 
-    btn.MouseEnter:Connect(function()    tw(btn, {Size=UDim2.new(0,84,0,30)}, SPD_FAST) end)
-    btn.MouseLeave:Connect(function()    tw(btn, {Size=UDim2.new(0,80,0,28)}, SPD_FAST) end)
-    btn.MouseButton1Down:Connect(function()  tw(btn, {Size=UDim2.new(0,76,0,26)}, 0.07) end)
-    btn.MouseButton1Up:Connect(function()    tw(btn, {Size=UDim2.new(0,80,0,28)}, SPD_FAST) end)
-    btn.MouseButton1Click:Connect(function()
-        notify(name, "Executed successfully", "success", 2.5)
+    b.MouseEnter:Connect(function()    tw(b,{Size=UDim2.new(0,80,0,29)},SF) end)
+    b.MouseLeave:Connect(function()    tw(b,{Size=UDim2.new(0,76,0,27)},SF) end)
+    b.MouseButton1Down:Connect(function()  tw(b,{Size=UDim2.new(0,72,0,25)},0.07) end)
+    b.MouseButton1Up:Connect(function()    tw(b,{Size=UDim2.new(0,76,0,27)},SF) end)
+    b.MouseButton1Click:Connect(function()
+        notify(name,"Executed successfully","ok",2.5)
         if cb then cb() end
     end)
-    return row
+    return r
 end
 
--- ── Toggle ────────────────────────────────────────────
-local function addToggle(parent, name, desc, default, cb)
-    local state = default == true
-    local row   = baseRow(parent, 46)
-    rowLabels(row, name, desc)
+-- ── Toggle ─────────────────────────────────────────
+local function addTgl(parent, name, desc, def, cb)
+    local state=(def==true)
+    local r=row(parent,46); rowLbls(r,name,desc)
 
-    local track = make("Frame", {
-        AnchorPoint      = Vector2.new(1, 0.5),
-        BackgroundColor3 = state and T.Accent or T.Toggle,
-        Position         = UDim2.new(1, -13, 0.5, 0),
-        Size             = UDim2.new(0, 46, 0, 25),
-        ZIndex           = 16, Parent = row,
-    })
-    corner(track, 13)
+    local track=mk("Frame",{
+        AnchorPoint=Vector2.new(1,0.5),
+        BackgroundColor3=state and T.Accent or T.Track,
+        Position=UDim2.new(1,-12,0.5,0),
+        Size=UDim2.new(0,44,0,24), ZIndex=17, Parent=r,
+    }); rnd(track,12)
 
-    local knob = make("Frame", {
-        AnchorPoint      = Vector2.new(0, 0.5),
-        BackgroundColor3 = T.White,
-        Position         = UDim2.new(0, state and 23 or 2, 0.5, 0),
-        Size             = UDim2.new(0, 21, 0, 21),
-        ZIndex           = 17, Parent = track,
-    })
-    corner(knob, 11)
+    local knob=mk("Frame",{
+        AnchorPoint=Vector2.new(0,0.5),
+        BackgroundColor3=T.White,
+        Position=UDim2.new(0,state and 22 or 2,0.5,0),
+        Size=UDim2.new(0,20,0,20), ZIndex=18, Parent=track,
+    }); rnd(knob,10)
 
-    local hit = make("TextButton", {
-        BackgroundTransparency = 1,
-        Size   = UDim2.new(1, 0, 1, 0),
-        Text   = "",
-        ZIndex = 18, Parent = track,
+    -- hitbox button ON TOP of track (ZIndex 19 > knob 18)
+    local hit=mk("TextButton",{
+        BackgroundTransparency=1,
+        Size=UDim2.new(1,0,1,0),
+        Text="", ZIndex=19, Parent=track,
     })
     hit.MouseButton1Click:Connect(function()
-        state = not state
-        tw(track, { BackgroundColor3 = state and T.Accent or T.Toggle }, SPD_FAST)
-        tw(knob,  { Position = UDim2.new(0, state and 23 or 2, 0.5, 0) }, SPD_FAST)
-        changeActive(state and 1 or -1)
+        state=not state
+        tw(track,{BackgroundColor3=state and T.Accent or T.Track},SF)
+        tw(knob,{Position=UDim2.new(0,state and 22 or 2,0.5,0)},SF)
+        setActive(state and 1 or -1)
         if cb then cb(state) end
     end)
 
-    if state then changeActive(1) end
-    return row, function() return state end
+    if state then setActive(1) end
+    return r, function() return state end
 end
 
--- ── Slider ────────────────────────────────────────────
-local function addSlider(parent, name, minV, maxV, default, cb)
-    local val      = default or minV
-    local dragging = false
-    local row      = baseRow(parent, 56)
+-- ── Slider ─────────────────────────────────────────
+local function addSld(parent, name, mn, mx, def, cb)
+    local v=def or mn; local drag=false
+    local r=row(parent,54)
 
-    make("TextLabel", {
-        BackgroundTransparency = 1,
-        Position  = UDim2.new(0, 13, 0, 8),
-        Size      = UDim2.new(0.68, 0, 0, 16),
-        Text      = name,
-        TextColor3 = T.Text,
-        TextSize  = 13,
-        Font      = FONT,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex    = 16, Parent = row,
-    })
-    local valLbl = make("TextLabel", {
-        AnchorPoint  = Vector2.new(1, 0),
-        BackgroundTransparency = 1,
-        Position  = UDim2.new(1, -13, 0, 8),
-        Size      = UDim2.new(0, 58, 0, 16),
-        Text      = tostring(val),
-        TextColor3 = T.AccentLight,
-        TextSize  = 12,
-        Font      = FONT_BOLD,
-        TextXAlignment = Enum.TextXAlignment.Right,
-        ZIndex    = 16, Parent = row,
-    })
+    mk("TextLabel",{BackgroundTransparency=1,
+        Position=UDim2.new(0,12,0,7),
+        Size=UDim2.new(0.68,0,0,16),
+        Text=name, TextColor3=T.Text, TextSize=13, Font=FN,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        ZIndex=17, Parent=r})
 
-    local track = make("Frame", {
-        BackgroundColor3 = T.Toggle,
-        Position = UDim2.new(0, 13, 0, 36),
-        Size     = UDim2.new(1, -26, 0, 6),
-        ZIndex   = 16, Parent = row,
-    })
-    corner(track, 3)
+    local vLbl=mk("TextLabel",{
+        AnchorPoint=Vector2.new(1,0),
+        BackgroundTransparency=1,
+        Position=UDim2.new(1,-12,0,7),
+        Size=UDim2.new(0,52,0,16),
+        Text=tostring(v), TextColor3=T.AccentL,
+        TextSize=12, Font=FNB,
+        TextXAlignment=Enum.TextXAlignment.Right,
+        ZIndex=17, Parent=r})
 
-    local pct  = (val - minV) / (maxV - minV)
-    local fill = make("Frame", {
-        BackgroundColor3 = T.Accent,
-        Size             = UDim2.new(pct, 0, 1, 0),
-        ZIndex           = 17, Parent = track,
-    })
-    corner(fill, 3)
-    grad(fill, T.AccentLight, T.AccentDark, 0)
+    local track=mk("Frame",{BackgroundColor3=T.Track,
+        Position=UDim2.new(0,12,0,34),
+        Size=UDim2.new(1,-24,0,6), ZIndex=16, Parent=r})
+    rnd(track,3)
 
-    local knob = make("Frame", {
-        AnchorPoint      = Vector2.new(0.5, 0.5),
-        BackgroundColor3 = T.White,
-        Position         = UDim2.new(pct, 0, 0.5, 0),
-        Size             = UDim2.new(0, 14, 0, 14),
-        ZIndex           = 18, Parent = track,
-    })
-    corner(knob, 7)
-    stroke(knob, T.Accent, 2)
+    local pct=(v-mn)/(mx-mn)
+    local fill=mk("Frame",{BackgroundColor3=T.Accent,
+        Size=UDim2.new(pct,0,1,0), ZIndex=17, Parent=track})
+    rnd(fill,3); grd(fill, T.AccentL, T.AccentD, 0)
 
-    local hit = make("TextButton", {
-        BackgroundTransparency = 1,
-        Position = UDim2.new(0, -8, 0, -8),
-        Size     = UDim2.new(1, 16, 1, 16),
-        Text     = "",
-        ZIndex   = 19, Parent = track,
-    })
+    local knob=mk("Frame",{
+        AnchorPoint=Vector2.new(0.5,0.5),
+        BackgroundColor3=T.White,
+        Position=UDim2.new(pct,0,0.5,0),
+        Size=UDim2.new(0,14,0,14), ZIndex=18, Parent=track})
+    rnd(knob,7); bdr(knob, T.Accent, 2)
 
-    local function update(x)
-        local rel = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
-        val = math.round(minV + (maxV - minV) * rel)
-        local p = (val - minV) / (maxV - minV)
-        tw(fill, { Size = UDim2.new(p, 0, 1, 0) }, 0.05)
-        tw(knob, { Position = UDim2.new(p, 0, 0.5, 0) }, 0.05)
-        valLbl.Text = tostring(val)
-        if cb then cb(val) end
+    -- wide invisible hit area (ZIndex 19)
+    local hit=mk("TextButton",{
+        BackgroundTransparency=1,
+        Position=UDim2.new(0,-8,0,-8),
+        Size=UDim2.new(1,16,1,16),
+        Text="", ZIndex=19, Parent=track})
+
+    local function upd(x)
+        local rel=math.clamp((x-track.AbsolutePosition.X)/track.AbsoluteSize.X,0,1)
+        v=math.round(mn+(mx-mn)*rel)
+        local p=(v-mn)/(mx-mn)
+        tw(fill,{Size=UDim2.new(p,0,1,0)},0.05)
+        tw(knob,{Position=UDim2.new(p,0,0.5,0)},0.05)
+        vLbl.Text=tostring(v)
+        if cb then cb(v) end
     end
 
-    hit.MouseButton1Down:Connect(function(x) dragging = true; update(x) end)
+    hit.MouseButton1Down:Connect(function(x) drag=true; upd(x) end)
     UserInputService.InputChanged:Connect(function(i)
-        if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then
-            update(i.Position.X)
-        end
+        if drag and i.UserInputType==Enum.UserInputType.MouseMovement then
+            upd(i.Position.X) end
     end)
     UserInputService.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 then dragging = false end
+        if i.UserInputType==Enum.UserInputType.MouseButton1 then drag=false end
     end)
-
-    return row, function() return val end
+    return r, function() return v end
 end
 
--- ── Dropdown ──────────────────────────────────────────
-local openDrop = nil
+-- ── Dropdown ───────────────────────────────────────
+local openDD=nil
 
-local function addDropdown(parent, name, options, default, cb)
-    local selected = default or options[1]
-    local isOpen   = false
-    local row      = baseRow(parent, 46)
+local function addDD(parent, name, opts, def, cb)
+    local sel=def or opts[1]; local open=false
+    local r=row(parent,46)
 
-    make("TextLabel", {
-        BackgroundTransparency = 1,
-        Position  = UDim2.new(0, 13, 0, 13),
-        Size      = UDim2.new(0.44, 0, 0, 18),
-        Text      = name,
-        TextColor3 = T.Text,
-        TextSize  = 13,
-        Font      = FONT,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex    = 16, Parent = row,
-    })
+    mk("TextLabel",{BackgroundTransparency=1,
+        Position=UDim2.new(0,12,0,13),
+        Size=UDim2.new(0.44,0,0,18),
+        Text=name, TextColor3=T.Text, TextSize=13, Font=FN,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        ZIndex=17, Parent=r})
 
-    local selBox = make("Frame", {
-        AnchorPoint      = Vector2.new(1, 0.5),
-        BackgroundColor3 = T.BG,
-        Position         = UDim2.new(1, -12, 0.5, 0),
-        Size             = UDim2.new(0, 132, 0, 28),
-        ZIndex           = 16, Parent = row,
-    })
-    corner(selBox, 6)
-    stroke(selBox, T.Border, 1)
+    local box=mk("Frame",{
+        AnchorPoint=Vector2.new(1,0.5),
+        BackgroundColor3=T.BG,
+        Position=UDim2.new(1,-11,0.5,0),
+        Size=UDim2.new(0,130,0,27), ZIndex=17, Parent=r})
+    rnd(box,6); bdr(box)
 
-    local selLbl = make("TextLabel", {
-        BackgroundTransparency = 1,
-        Position  = UDim2.new(0, 10, 0, 0),
-        Size      = UDim2.new(1, -28, 1, 0),
-        Text      = selected,
-        TextColor3 = T.Text,
-        TextSize  = 12,
-        Font      = FONT,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex    = 17, Parent = selBox,
-    })
-    local arrowLbl = make("TextLabel", {
-        AnchorPoint  = Vector2.new(1, 0.5),
-        BackgroundTransparency = 1,
-        Position  = UDim2.new(1, -8, 0.5, 0),
-        Size      = UDim2.new(0, 16, 0, 16),
-        Text      = "▾",
-        TextColor3 = T.Muted,
-        TextSize  = 12,
-        Font      = FONT,
-        ZIndex    = 17, Parent = selBox,
-    })
+    local selLbl=mk("TextLabel",{BackgroundTransparency=1,
+        Position=UDim2.new(0,9,0,0), Size=UDim2.new(1,-26,1,0),
+        Text=sel, TextColor3=T.Text, TextSize=12, Font=FN,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        ZIndex=18, Parent=box})
 
-    -- popup lives in POPUP_LAYER to escape clipping
-    local OPT_H    = 28
-    local visible  = math.min(#options, 5)
-    local popup    = make("Frame", {
-        BackgroundColor3 = Color3.fromRGB(18, 18, 30),
-        Size             = UDim2.new(0, 132, 0, 0),
-        ZIndex           = 95,
-        Visible          = false,
-        ClipsDescendants = true,
-        Parent           = POPUP_LAYER,
-    })
-    corner(popup, 7)
-    stroke(popup, T.Border, 1)
+    local arr=mk("TextLabel",{
+        AnchorPoint=Vector2.new(1,0.5),
+        BackgroundTransparency=1,
+        Position=UDim2.new(1,-7,0.5,0),
+        Size=UDim2.new(0,14,0,14),
+        Text="▾", TextColor3=T.Muted, TextSize=11, Font=FN,
+        ZIndex=18, Parent=box})
 
-    local popList = make("Frame", {
-        BackgroundTransparency = 1,
-        Size    = UDim2.new(1, 0, 0, 0),
-        AutomaticSize = Enum.AutomaticSize.Y,
-        ZIndex  = 96, Parent = popup,
-    })
-    make("UIListLayout", { Padding = UDim.new(0, 2), Parent = popList })
-    pad(popList, 4, 4, 4, 4)
+    -- Popup lives in OVL so it escapes WIN clipping
+    local OPH=27
+    local maxV=math.min(#opts,5)
+    local pop=mk("Frame",{
+        BackgroundColor3=Color3.fromRGB(18,18,30),
+        Size=UDim2.new(0,130,0,0),
+        ZIndex=95, Visible=false, ClipsDescendants=true, Parent=OVL})
+    rnd(pop,7); bdr(pop)
 
-    local function buildOpts()
-        for _, opt in ipairs(options) do
-            local isActive = (opt == selected)
-            local ob = make("TextButton", {
-                BackgroundColor3       = isActive and Color3.fromRGB(28, 20, 52) or T.BG,
-                BackgroundTransparency = isActive and 0 or 1,
-                Size   = UDim2.new(1, 0, 0, OPT_H),
-                Text   = "",
-                ZIndex = 97, Parent = popList,
-            })
-            corner(ob, 5)
-            make("TextLabel", {
-                BackgroundTransparency = 1,
-                Position  = UDim2.new(0, 10, 0, 0),
-                Size      = UDim2.new(1, -10, 1, 0),
-                Text      = opt,
-                TextColor3 = isActive and T.AccentLight or T.Text,
-                TextSize  = 12,
-                Font      = isActive and FONT_BOLD or FONT,
-                TextXAlignment = Enum.TextXAlignment.Left,
-                ZIndex    = 98, Parent = ob,
-            })
+    local plist=mk("Frame",{BackgroundTransparency=1,
+        Size=UDim2.new(1,0,0,0),
+        AutomaticSize=Enum.AutomaticSize.Y,
+        ZIndex=96, Parent=pop})
+    mk("UIListLayout",{Padding=UDim.new(0,2), Parent=plist})
+    do
+        local u=Instance.new("UIPadding")
+        u.PaddingTop=UDim.new(0,4); u.PaddingBottom=UDim.new(0,4)
+        u.PaddingLeft=UDim.new(0,4); u.PaddingRight=UDim.new(0,4)
+        u.Parent=plist
+    end
+
+    local function buildPop()
+        for _,opt in ipairs(opts) do
+            local isA=(opt==sel)
+            local ob=mk("TextButton",{
+                BackgroundColor3=isA and Color3.fromRGB(28,18,52) or T.BG,
+                BackgroundTransparency=isA and 0 or 1,
+                Size=UDim2.new(1,0,0,OPH), Text="",
+                ZIndex=97, Parent=plist})
+            rnd(ob,5)
+            mk("TextLabel",{BackgroundTransparency=1,
+                Position=UDim2.new(0,9,0,0),
+                Size=UDim2.new(1,-9,1,0),
+                Text=opt,
+                TextColor3=isA and T.AccentL or T.Text,
+                TextSize=12, Font=isA and FNB or FN,
+                TextXAlignment=Enum.TextXAlignment.Left,
+                ZIndex=98, Parent=ob})
             ob.MouseEnter:Connect(function()
-                if not isActive then tw(ob, {BackgroundTransparency=0.85, BackgroundColor3=T.Card}, SPD_FAST) end
+                if not isA then
+                    tw(ob,{BackgroundTransparency=0.82,
+                        BackgroundColor3=T.Card},SF) end
             end)
             ob.MouseLeave:Connect(function()
-                if not isActive then tw(ob, {BackgroundTransparency=1}, SPD_FAST) end
+                if not isA then tw(ob,{BackgroundTransparency=1},SF) end
             end)
             ob.MouseButton1Click:Connect(function()
-                selected    = opt
-                selLbl.Text = opt
-                isOpen      = false
-                tw(popup, { Size = UDim2.new(0, 132, 0, 0) }, SPD_FAST)
-                tw(arrowLbl, { Rotation = 0 }, SPD_FAST)
-                task.delay(SPD_FAST, function() popup.Visible = false end)
-                openDrop = nil
-                for _, c in ipairs(popList:GetChildren()) do
+                sel=opt; selLbl.Text=opt; open=false
+                tw(pop,{Size=UDim2.new(0,130,0,0)},SF)
+                tw(arr,{Rotation=0},SF)
+                spawn(function() wait(SF+0.05); pop.Visible=false end)
+                openDD=nil
+                for _,c in ipairs(plist:GetChildren()) do
                     if c:IsA("TextButton") then c:Destroy() end
                 end
-                buildOpts()
-                if cb then cb(selected) end
+                buildPop()
+                if cb then cb(sel) end
             end)
         end
     end
-    buildOpts()
+    buildPop()
 
-    local targetH = OPT_H * visible + 8 + (visible - 1) * 2 + 8
+    local tgtH=OPH*maxV+8+(maxV-1)*2+8
 
-    local function openPopup()
-        if openDrop and openDrop ~= popup then
-            tw(openDrop, { Size = UDim2.new(0, 132, 0, 0) }, SPD_FAST)
-            task.delay(SPD_FAST, function() openDrop.Visible = false end)
+    local function openPop()
+        if openDD and openDD~=pop then
+            tw(openDD,{Size=UDim2.new(0,130,0,0)},SF)
+            spawn(function() wait(SF+0.05); openDD.Visible=false end)
         end
-        local ap = selBox.AbsolutePosition
-        local as = selBox.AbsoluteSize
-        popup.Position = UDim2.new(0, ap.X, 0, ap.Y + as.Y + 4)
-        popup.Visible  = true
-        tw(popup, { Size = UDim2.new(0, 132, 0, targetH) }, SPD, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-        tw(arrowLbl, { Rotation = 180 }, SPD_FAST)
-        openDrop = popup
-        isOpen   = true
+        local ap=box.AbsolutePosition; local as=box.AbsoluteSize
+        pop.Position=UDim2.new(0,ap.X,0,ap.Y+as.Y+4)
+        pop.Visible=true
+        tw(pop,{Size=UDim2.new(0,130,0,tgtH)},S,
+            Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        tw(arr,{Rotation=180},SF)
+        openDD=pop; open=true
+    end
+    local function closePop()
+        tw(pop,{Size=UDim2.new(0,130,0,0)},SF)
+        tw(arr,{Rotation=0},SF)
+        spawn(function() wait(SF+0.05); pop.Visible=false end)
+        openDD=nil; open=false
     end
 
-    local function closePopup()
-        tw(popup, { Size = UDim2.new(0, 132, 0, 0) }, SPD_FAST)
-        tw(arrowLbl, { Rotation = 0 }, SPD_FAST)
-        task.delay(SPD_FAST, function() popup.Visible = false end)
-        openDrop = nil
-        isOpen   = false
-    end
-
-    local selBtn = make("TextButton", {
-        BackgroundTransparency = 1,
-        Size   = UDim2.new(1, 0, 1, 0),
-        Text   = "",
-        ZIndex = 18, Parent = selBox,
-    })
-    selBtn.MouseButton1Click:Connect(function()
-        if isOpen then closePopup() else openPopup() end
+    local hitBtn=mk("TextButton",{BackgroundTransparency=1,
+        Size=UDim2.new(1,0,1,0), Text="", ZIndex=19, Parent=box})
+    hitBtn.MouseButton1Click:Connect(function()
+        if open then closePop() else openPop() end
     end)
-
     UserInputService.InputBegan:Connect(function(i)
-        if not isOpen or i.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
-        local mx, my = i.Position.X, i.Position.Y
-        local p, s   = popup.AbsolutePosition, popup.AbsoluteSize
-        if mx < p.X or mx > p.X + s.X or my < p.Y or my > p.Y + s.Y then
-            closePopup()
-        end
+        if not open then return end
+        if i.UserInputType~=Enum.UserInputType.MouseButton1 then return end
+        local mx,my=i.Position.X,i.Position.Y
+        local pp,ps=pop.AbsolutePosition,pop.AbsoluteSize
+        if mx<pp.X or mx>pp.X+ps.X or my<pp.Y or my>pp.Y+ps.Y then
+            closePop() end
     end)
-
-    return row, function() return selected end
+    return r, function() return sel end
 end
 
--- ── Keybind ───────────────────────────────────────────
-local function addKeybind(parent, name, defaultKey, cb)
-    local curKey   = defaultKey or Enum.KeyCode.Unknown
-    local listening = false
-    local row       = baseRow(parent, 46)
+-- ── Keybind ────────────────────────────────────────
+local function addKey(parent, name, defKey, cb)
+    local cur=defKey or Enum.KeyCode.Unknown
+    local listen=false
+    local r=row(parent,46)
+    mk("TextLabel",{BackgroundTransparency=1,
+        Position=UDim2.new(0,12,0,13),
+        Size=UDim2.new(0.55,0,0,18),
+        Text=name, TextColor3=T.Text, TextSize=13, Font=FN,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        ZIndex=17, Parent=r})
 
-    make("TextLabel", {
-        BackgroundTransparency = 1,
-        Position  = UDim2.new(0, 13, 0, 13),
-        Size      = UDim2.new(0.55, 0, 0, 18),
-        Text      = name,
-        TextColor3 = T.Text,
-        TextSize  = 13,
-        Font      = FONT,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex    = 16, Parent = row,
-    })
-
-    local badge = make("TextButton", {
-        AnchorPoint      = Vector2.new(1, 0.5),
-        BackgroundColor3 = T.BG,
-        Position         = UDim2.new(1, -12, 0.5, 0),
-        Size             = UDim2.new(0, 84, 0, 28),
-        Text             = curKey.Name,
-        TextColor3       = T.AccentLight,
-        TextSize         = 11,
-        Font             = FONT_BOLD,
-        ZIndex           = 17, Parent = row,
-    })
-    corner(badge, 6)
-    stroke(badge, T.Accent, 1)
+    local badge=mk("TextButton",{
+        AnchorPoint=Vector2.new(1,0.5),
+        BackgroundColor3=T.BG,
+        Position=UDim2.new(1,-11,0.5,0),
+        Size=UDim2.new(0,82,0,27),
+        Text=cur.Name, TextColor3=T.AccentL,
+        TextSize=11, Font=FNB, ZIndex=18, Parent=r})
+    rnd(badge,6); bdr(badge, T.Accent)
 
     badge.MouseButton1Click:Connect(function()
-        listening          = true
-        badge.Text         = "  . . ."
-        badge.TextColor3   = T.Warning
-        tw(badge, { BackgroundColor3 = Color3.fromRGB(28, 22, 8) }, SPD_FAST)
-        tw(badge, { Size = UDim2.new(0, 84, 0, 28) }, SPD_FAST)
+        listen=true
+        badge.Text="  . . ."
+        badge.TextColor3=T.Yellow
+        tw(badge,{BackgroundColor3=Color3.fromRGB(28,22,6)},SF)
     end)
-
-    UserInputService.InputBegan:Connect(function(i, gp)
-        if not listening then return end
-        if i.UserInputType ~= Enum.UserInputType.Keyboard then return end
-        listening        = false
-        curKey           = i.KeyCode
-        badge.Text       = i.KeyCode.Name
-        badge.TextColor3 = T.AccentLight
-        tw(badge, { BackgroundColor3 = T.BG }, SPD_FAST)
-        if cb then cb(curKey) end
+    UserInputService.InputBegan:Connect(function(i,gp)
+        if not listen then return end
+        if i.UserInputType~=Enum.UserInputType.Keyboard then return end
+        listen=false; cur=i.KeyCode
+        badge.Text=i.KeyCode.Name; badge.TextColor3=T.AccentL
+        tw(badge,{BackgroundColor3=T.BG},SF)
+        if cb then cb(cur) end
     end)
-
-    return row, function() return curKey end
+    return r, function() return cur end
 end
 
--- ── Input Field ───────────────────────────────────────
-local function addInput(parent, name, placeholder, cb)
-    local row = baseRow(parent, 46)
+-- ── Text Input ─────────────────────────────────────
+local function addInp(parent, name, ph, cb)
+    local r=row(parent,46)
+    mk("TextLabel",{BackgroundTransparency=1,
+        Position=UDim2.new(0,12,0,13),
+        Size=UDim2.new(0.4,0,0,18),
+        Text=name, TextColor3=T.Text, TextSize=13, Font=FN,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        ZIndex=17, Parent=r})
 
-    make("TextLabel", {
-        BackgroundTransparency = 1,
-        Position  = UDim2.new(0, 13, 0, 13),
-        Size      = UDim2.new(0.42, 0, 0, 18),
-        Text      = name,
-        TextColor3 = T.Text,
-        TextSize  = 13,
-        Font      = FONT,
-        TextXAlignment = Enum.TextXAlignment.Left,
-        ZIndex    = 16, Parent = row,
-    })
+    local box=mk("Frame",{
+        AnchorPoint=Vector2.new(1,0.5),
+        BackgroundColor3=T.BG,
+        Position=UDim2.new(1,-11,0.5,0),
+        Size=UDim2.new(0,148,0,27), ZIndex=17, Parent=r})
+    rnd(box,6)
+    local bs=bdr(box)
 
-    local box = make("Frame", {
-        AnchorPoint      = Vector2.new(1, 0.5),
-        BackgroundColor3 = T.BG,
-        Position         = UDim2.new(1, -12, 0.5, 0),
-        Size             = UDim2.new(0, 150, 0, 28),
-        ZIndex           = 16, Parent = row,
-    })
-    corner(box, 6)
-    local boxStroke = stroke(box, T.Border, 1)
-
-    local tb = make("TextBox", {
-        BackgroundTransparency = 1,
-        Position          = UDim2.new(0, 9, 0, 0),
-        Size              = UDim2.new(1, -18, 1, 0),
-        Text              = "",
-        PlaceholderText   = placeholder or "Enter value...",
-        PlaceholderColor3 = T.Muted,
-        TextColor3        = T.Text,
-        TextSize          = 12,
-        Font              = FONT,
-        TextXAlignment    = Enum.TextXAlignment.Left,
-        ClearTextOnFocus  = false,
-        ZIndex            = 17, Parent = box,
-    })
+    local tb=mk("TextBox",{BackgroundTransparency=1,
+        Position=UDim2.new(0,8,0,0), Size=UDim2.new(1,-16,1,0),
+        Text="", PlaceholderText=ph or "Enter value...",
+        PlaceholderColor3=T.Muted, TextColor3=T.Text,
+        TextSize=12, Font=FN,
+        TextXAlignment=Enum.TextXAlignment.Left,
+        ClearTextOnFocus=false, ZIndex=18, Parent=box})
 
     tb.Focused:Connect(function()
-        tw(box, { BackgroundColor3 = Color3.fromRGB(16, 12, 30) }, SPD_FAST)
-        boxStroke.Color = T.Accent
+        tw(box,{BackgroundColor3=Color3.fromRGB(16,12,30)},SF)
+        bs.Color=T.Accent
     end)
     tb.FocusLost:Connect(function(enter)
-        tw(box, { BackgroundColor3 = T.BG }, SPD_FAST)
-        boxStroke.Color = T.Border
+        tw(box,{BackgroundColor3=T.BG},SF)
+        bs.Color=T.Border
         if enter and cb then cb(tb.Text) end
     end)
-
-    return row, function() return tb.Text end
+    return r, function() return tb.Text end
 end
 
--- ══════════════════════════════════════════════════════
+-- ══════════════════════════════════════════════════
 --  TAB CONTENT
--- ══════════════════════════════════════════════════════
+-- ══════════════════════════════════════════════════
 
--- MAIN ─────────────────────────────────────────────────
+-- MAIN
 do
-    local sc = Tabs["Main"].scroll
-    local s1 = section(sc, "MOVEMENT")
-    addSlider( s1, "Walk Speed",    16,  250, 16,  nil)
-    addSlider( s1, "Jump Power",    50,  500, 50,  nil)
-    addToggle( s1, "Fly",           "Float freely in the air",    false, nil)
-    addToggle( s1, "Noclip",        "Phase through all objects",  false, nil)
-    addToggle( s1, "Infinite Jump", "Jump without height limits", false, nil)
-    addKeybind(s1, "Fly Hotkey",    Enum.KeyCode.F,               nil)
+    local sc=Tabs["Main"].scroll
+    local s1,_=sec(sc,"MOVEMENT")
+    addSld(s1,"Walk Speed",    16, 250, 16,  nil)
+    addSld(s1,"Jump Power",    50, 500, 50,  nil)
+    addTgl(s1,"Fly",           "Float freely",      false,nil)
+    addTgl(s1,"Noclip",        "Phase through walls",false,nil)
+    addTgl(s1,"Infinite Jump", "Jump without limits",false,nil)
+    addKey(s1,"Fly Hotkey",    Enum.KeyCode.F,       nil)
 
-    local s2 = section(sc, "AUTOMATION")
-    addButton( s2, "Auto Farm",    "Automatically farms resources", nil)
-    addButton( s2, "Auto Collect", "Collects items in radius",      nil)
-    addToggle( s2, "Anti AFK",     "Prevents inactivity kick", true,  nil)
-    addSlider( s2, "Farm Radius",  10,  500, 50,  nil)
+    local s2=sec(sc,"AUTOMATION")
+    addBtn(s2,"Auto Farm",    "Automatically farms resources",nil)
+    addBtn(s2,"Auto Collect", "Collects items in radius",     nil)
+    addTgl(s2,"Anti AFK",     "Prevents inactivity kick",true,nil)
+    addSld(s2,"Farm Radius",  10, 500, 50, nil)
 end
 
--- VISUAL ───────────────────────────────────────────────
+-- VISUAL
 do
-    local sc = Tabs["Visual"].scroll
-    local s1 = section(sc, "ESP")
-    addToggle(  s1, "Player ESP",  "Player bounding boxes",  false, nil)
-    addToggle(  s1, "Item ESP",    "Ground item highlights", false, nil)
-    addToggle(  s1, "NPC ESP",     "NPC outlines",           false, nil)
-    addToggle(  s1, "Name Tags",   "Floating name labels",   false, nil)
-    addToggle(  s1, "Health Bars", "HP bars above players",  false, nil)
-    addDropdown(s1, "ESP Color",   {"Team","White","Red","Purple","Cyan"}, "Team", nil)
+    local sc=Tabs["Visual"].scroll
+    local s1=sec(sc,"ESP")
+    addTgl(s1,"Player ESP",  "Player bounding boxes",  false,nil)
+    addTgl(s1,"Item ESP",    "Ground item highlights", false,nil)
+    addTgl(s1,"NPC ESP",     "NPC outlines",           false,nil)
+    addTgl(s1,"Name Tags",   "Floating name labels",   false,nil)
+    addTgl(s1,"Health Bars", "HP bars above heads",    false,nil)
+    addDD( s1,"ESP Color",  {"Team","White","Red","Purple","Cyan"},"Team",nil)
 
-    local s2 = section(sc, "RENDERING")
-    addSlider( s2, "Field of View",     60, 130, 70,  nil)
-    addSlider( s2, "Render Distance",  100, 2048,512, nil)
-    addToggle( s2, "Fullbright",   "Remove all darkness",   false, nil)
-    addToggle( s2, "No Fog",       "Clear weather fog",     false, nil)
+    local s2=sec(sc,"RENDERING")
+    addSld(s2,"Field of View",     60, 130, 70,  nil)
+    addSld(s2,"Render Distance",  100,2048, 512, nil)
+    addTgl(s2,"Fullbright",  "Remove darkness", false,nil)
+    addTgl(s2,"No Fog",      "Clear weather fog",false,nil)
 end
 
--- WORLD ────────────────────────────────────────────────
+-- WORLD
 do
-    local sc = Tabs["World"].scroll
-    local s1 = section(sc, "PHYSICS")
-    addSlider(  s1, "Gravity",          0,   400, 196, nil)
-    addSlider(  s1, "Wind Speed",       0,   100, 0,   nil)
-    addToggle(  s1, "Freeze Players",   "Pause all players",     false, nil)
-    addToggle(  s1, "No Clip",          "Phase through objects", false, nil)
-    addInput(   s1, "Custom Gravity",   "e.g. 196.2",            nil)
+    local sc=Tabs["World"].scroll
+    local s1=sec(sc,"PHYSICS")
+    addSld(s1,"Gravity",        0,  400,196,nil)
+    addSld(s1,"Wind Speed",     0,  100,  0,nil)
+    addTgl(s1,"Freeze Players", "Pause all players",    false,nil)
+    addTgl(s1,"No Clip",        "Phase through objects",false,nil)
+    addInp(s1,"Custom Gravity", "e.g. 196.2",           nil)
 
-    local s2 = section(sc, "TIME & WEATHER")
-    addSlider(  s2, "Time of Day",   0,  24, 12,   nil)
-    addToggle(  s2, "Lock Time",     "Freeze time progression", false, nil)
-    addDropdown(s2, "Weather",       {"Clear","Fog","Rain","Snow","Storm"}, "Clear", nil)
-    addButton(  s2, "Set Sunrise",   "Jump to 06:00",  nil)
-    addButton(  s2, "Set Midnight",  "Jump to 00:00",  nil)
+    local s2=sec(sc,"TIME & WEATHER")
+    addSld(s2,"Time of Day",  0,  24, 12, nil)
+    addTgl(s2,"Lock Time",    "Freeze time", false,nil)
+    addDD( s2,"Weather",     {"Clear","Fog","Rain","Snow","Storm"},"Clear",nil)
+    addBtn(s2,"Set Sunrise",  "Jump to 06:00",nil)
+    addBtn(s2,"Set Midnight", "Jump to 00:00",nil)
 end
 
--- PLAYER ───────────────────────────────────────────────
+-- PLAYER
 do
-    local sc = Tabs["Player"].scroll
-    local s1 = section(sc, "CHARACTER")
-    addSlider(  s1, "Health",         0,   100, 100, nil)
-    addSlider(  s1, "Walk Speed",     16,  250, 16,  nil)
-    addToggle(  s1, "God Mode",       "Take no damage",    false, nil)
-    addToggle(  s1, "Invisible",      "Become invisible",  false, nil)
-    addToggle(  s1, "Always Sprint",  "Permanent sprint",  false, nil)
+    local sc=Tabs["Player"].scroll
+    local s1=sec(sc,"CHARACTER")
+    addSld(s1,"Health",        0, 100,100,nil)
+    addSld(s1,"Walk Speed",   16, 250, 16,nil)
+    addTgl(s1,"God Mode",      "Take no damage",   false,nil)
+    addTgl(s1,"Invisible",     "Become invisible", false,nil)
+    addTgl(s1,"Always Sprint", "Permanent sprint", false,nil)
 
-    local s2 = section(sc, "TELEPORT")
-    addDropdown(s2, "Target",        {"Nearest","Random","Manual"}, "Nearest", nil)
-    addButton(  s2, "To Spawn",       "Teleport to spawn point", nil)
-    addButton(  s2, "To Cursor",      "Teleport to mouse hit",   nil)
-    addButton(  s2, "To Player",      "Teleport to selection",   nil)
-    addKeybind( s2, "Teleport Key",   Enum.KeyCode.T,            nil)
+    local s2=sec(sc,"TELEPORT")
+    addDD( s2,"Target",      {"Nearest","Random","Manual"},"Nearest",nil)
+    addBtn(s2,"To Spawn",     "Teleport to spawn point",nil)
+    addBtn(s2,"To Cursor",    "Teleport to mouse hit",  nil)
+    addBtn(s2,"To Player",    "Teleport to selection",  nil)
+    addKey(s2,"Teleport Key", Enum.KeyCode.T,            nil)
 end
 
--- MISC ─────────────────────────────────────────────────
+-- MISC
 do
-    local sc = Tabs["Misc"].scroll
-    local s1 = section(sc, "UTILITY")
-    addButton(  s1, "Rejoin",          "Reconnect to this server",    nil)
-    addButton(  s1, "Server Hop",      "Join a different server",     nil)
-    addButton(  s1, "Copy Join Link",  "Copy game link to clipboard", nil)
-    addToggle(  s1, "Debug Info",      "Show FPS & debug overlay",    false, nil)
+    local sc=Tabs["Misc"].scroll
+    local s1=sec(sc,"UTILITY")
+    addBtn(s1,"Rejoin",         "Reconnect to this server",    nil)
+    addBtn(s1,"Server Hop",     "Join a different server",     nil)
+    addBtn(s1,"Copy Join Link", "Copy game link to clipboard", nil)
+    addTgl(s1,"Debug Info",     "Show FPS & debug overlay",    false,nil)
 
-    local s2 = section(sc, "INTERFACE")
-    addToggle(  s2, "Watermark",       "Show watermark in corner",    true,  nil)
-    addDropdown(s2, "Theme",           {"Dark","Darker","AMOLED"},    "Dark", nil)
-    addSlider(  s2, "UI Opacity",      40,  100, 100, nil)
-    addKeybind( s2, "Toggle Hub",      Enum.KeyCode.Insert,           nil)
+    local s2=sec(sc,"INTERFACE")
+    addTgl(s2,"Watermark",    "Show watermark in corner",true, nil)
+    addDD( s2,"Theme",       {"Dark","Darker","AMOLED"},"Dark",nil)
+    addSld(s2,"UI Opacity",   40, 100, 100, nil)
+    addKey(s2,"Toggle Hub",   Enum.KeyCode.Insert,       nil)
 end
 
--- ── Activate first tab ────────────────────────────────
-setTab("Main")
+-- ══════════════════════════════════════════════════
+--  FIRST TAB
+-- ══════════════════════════════════════════════════
+switchTab("Main")
 
--- ══════════════════════════════════════════════════════
---  DRAG
--- ══════════════════════════════════════════════════════
-do
-    local drag, ds, sp = false, nil, nil
-    TITLEBAR.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 then
-            drag = true; ds = i.Position; sp = WIN.Position
-        end
-    end)
-    UserInputService.InputChanged:Connect(function(i)
-        if drag and i.UserInputType == Enum.UserInputType.MouseMovement then
-            local d = i.Position - ds
-            WIN.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X,
-                                     sp.Y.Scale, sp.Y.Offset + d.Y)
-        end
-    end)
-    UserInputService.InputEnded:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = false end
-    end)
-end
-
--- ══════════════════════════════════════════════════════
+-- ══════════════════════════════════════════════════
 --  WINDOW CONTROLS
--- ══════════════════════════════════════════════════════
-local minimized = false
-BTN_MINIMIZE.MouseButton1Click:Connect(function()
-    minimized = not minimized
-    tw(WIN,
-        { Size = minimized and UDim2.new(0, 610, 0, 50) or UDim2.new(0, 610, 0, 460) },
-        SPD, Enum.EasingStyle.Quart)
+-- ══════════════════════════════════════════════════
+local minimized=false
+MBTN.MouseButton1Click:Connect(function()
+    minimized=not minimized
+    tw(WIN,{Size=minimized
+        and UDim2.new(0,600,0,50)
+        or  UDim2.new(0,600,0,450)
+    },S,Enum.EasingStyle.Quart)
 end)
 
-local visible = true
-local function hideWin()
-    visible = false
-    tw(WIN, { Size = UDim2.new(0, 610, 0, 0), BackgroundTransparency = 1 }, SPD)
-    task.delay(SPD + 0.05, function() WIN.Visible = false end)
+local shown=true
+local function hide()
+    shown=false
+    tw(WIN,{Size=UDim2.new(0,600,0,0),BackgroundTransparency=1},S)
+    spawn(function() wait(S+0.06); WIN.Visible=false end)
 end
-local function showWin()
-    visible = true
-    WIN.Visible = true
-    tw(WIN, { Size = UDim2.new(0, 610, 0, 460), BackgroundTransparency = 0 },
-        0.36, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+local function show()
+    shown=true; WIN.Visible=true
+    tw(WIN,{Size=UDim2.new(0,600,0,450),BackgroundTransparency=0},
+        0.38,Enum.EasingStyle.Back,Enum.EasingDirection.Out)
 end
 
-BTN_CLOSE.MouseButton1Click:Connect(hideWin)
+CBTN.MouseButton1Click:Connect(hide)
 
-UserInputService.InputBegan:Connect(function(i, gp)
+UserInputService.InputBegan:Connect(function(i,gp)
     if gp then return end
-    if i.KeyCode == Enum.KeyCode.Insert then
-        if visible then hideWin() else showWin() end
+    if i.KeyCode==Enum.KeyCode.Insert then
+        if shown then hide() else show() end
     end
 end)
 
--- ══════════════════════════════════════════════════════
+-- ══════════════════════════════════════════════════
 --  OPEN ANIMATION
--- ══════════════════════════════════════════════════════
-WIN.Size                   = UDim2.new(0, 610, 0, 0)
-WIN.BackgroundTransparency = 1
-task.defer(function()
-    task.wait(0.2)
-    tw(WIN, { Size = UDim2.new(0, 610, 0, 460), BackgroundTransparency = 0 },
-        0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-    task.wait(0.5)
-    notify("ScriptHub", "Loaded  •  press INSERT to toggle", "success", 4)
+-- ══════════════════════════════════════════════════
+WIN.Size=UDim2.new(0,600,0,0)
+WIN.BackgroundTransparency=1
+
+spawn(function()
+    wait(0.25)
+    tw(WIN,{Size=UDim2.new(0,600,0,450),BackgroundTransparency=0},
+        0.42,Enum.EasingStyle.Back,Enum.EasingDirection.Out)
+    wait(0.6)
+    notify("ScriptHub","Loaded — INSERT to toggle","ok",4)
 end)
