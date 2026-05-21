@@ -33,6 +33,7 @@ getgenv().HitboxTransp      = getgenv().HitboxTransp      or 0.4
 getgenv().AntiWeave         = getgenv().AntiWeave         or false
 getgenv().PunchSpeed        = getgenv().PunchSpeed        or 1.7
 getgenv().FastmentEnabled   = getgenv().FastmentEnabled   or false
+getgenv().WalkSpeedOverride = getgenv().WalkSpeedOverride or false
 
 -- ══════════════════════════════════════════════════
 --  KEYBIND MANAGER
@@ -165,7 +166,7 @@ end
 LP.CharacterAdded:Connect(function(c)
     local h = c:WaitForChild("Humanoid", 5)
     if h then
-        h.WalkSpeed = getgenv().WalkSpeed
+        if getgenv().WalkSpeedOverride then h.WalkSpeed = getgenv().WalkSpeed end
         h.JumpPower = getgenv().JumpPower
     end
 end)
@@ -174,14 +175,16 @@ spawn(function()
         local c = LP.Character
         local h = c and c:FindFirstChild("Humanoid")
         if h then
-            if h.WalkSpeed ~= getgenv().WalkSpeed then h.WalkSpeed = getgenv().WalkSpeed end
-            if h.JumpPower ~= getgenv().JumpPower  then h.JumpPower = getgenv().JumpPower  end
+            if getgenv().WalkSpeedOverride and h.WalkSpeed ~= getgenv().WalkSpeed then
+                h.WalkSpeed = getgenv().WalkSpeed
+            end
+            if h.JumpPower ~= getgenv().JumpPower then h.JumpPower = getgenv().JumpPower end
         end
     end) end
 end)
 
--- Fly  (BodyVelocity — direct, no spring lag)
-local flyConn, flyBV, flyBG
+-- Fly  (BodyVelocity only — no BodyGyro, no ChangeState jitter)
+local flyConn, flyBV
 local FLY_SPD = 46   -- base speed in studs/s
 local function enableFly()
     local c = LP.Character; if not c then return end
@@ -189,29 +192,19 @@ local function enableFly()
     local hum = c:FindFirstChildOfClass("Humanoid")
     if not hrp or not hum then return end
     hum.PlatformStand = true
-    pcall(function() hum:ChangeState(Enum.HumanoidStateType.Physics) end)
-    -- velocity driver
     flyBV = Instance.new("BodyVelocity")
-    flyBV.Velocity  = Vector3.new(0,0,0)
-    flyBV.MaxForce  = Vector3.new(1e9,1e9,1e9)
-    flyBV.P         = 1e9
-    flyBV.Parent    = hrp
-    -- gyro to keep character upright / facing cam
-    flyBG = Instance.new("BodyGyro")
-    flyBG.MaxTorque = Vector3.new(1e9,1e9,1e9)
-    flyBG.P         = 1e9
-    flyBG.D         = 500
-    flyBG.CFrame    = hrp.CFrame
-    flyBG.Parent    = hrp
+    flyBV.Velocity = Vector3.new(0, 0, 0)
+    flyBV.MaxForce = Vector3.new(4e4, 4e4, 4e4)
+    flyBV.P        = 1e4
+    flyBV.Parent   = hrp
     flyConn = RunService.Heartbeat:Connect(function()
         if not getgenv().FlyEnabled then return end
-        local cam = workspace.CurrentCamera
-        -- Flatten LookVector to horizontal plane so W/S stay level
-        local look  = cam.CFrame.LookVector
-        local flat  = Vector3.new(look.X, 0, look.Z)
+        local cam  = workspace.CurrentCamera
+        local look = cam.CFrame.LookVector
+        local flat = Vector3.new(look.X, 0, look.Z)
         if flat.Magnitude > 0.01 then flat = flat.Unit else flat = Vector3.new(0,0,-1) end
         local right = cam.CFrame.RightVector
-        local dir   = Vector3.new()
+        local dir   = Vector3.new(0, 0, 0)
         if UserInputService:IsKeyDown(Enum.KeyCode.W)         then dir = dir + flat  end
         if UserInputService:IsKeyDown(Enum.KeyCode.S)         then dir = dir - flat  end
         if UserInputService:IsKeyDown(Enum.KeyCode.A)         then dir = dir - right end
@@ -220,13 +213,11 @@ local function enableFly()
         if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then dir = dir - Vector3.new(0,1,0) end
         if dir.Magnitude > 0 then dir = dir.Unit end
         flyBV.Velocity = dir * FLY_SPD
-        flyBG.CFrame   = CFrame.new(hrp.Position, hrp.Position + flat)
     end)
 end
 local function disableFly()
     if flyConn then flyConn:Disconnect(); flyConn = nil end
     if flyBV   then flyBV:Destroy();  flyBV = nil end
-    if flyBG   then flyBG:Destroy();  flyBG = nil end
     pcall(function()
         local c = LP.Character; local h = c and c:FindFirstChildOfClass("Humanoid")
         if h then h.PlatformStand = false end
@@ -267,6 +258,29 @@ end)
 -- ══════════════════════════════════════════════════
 --  ALWAYS-CRIT LOGIC
 -- ══════════════════════════════════════════════════
+local critMod = {}  -- [plr] = {size, transparency, canCollide, massless, anchored}
+
+local function disableCrit()
+    getgenv().AlwaysCrit = false
+    for plr, og in pairs(critMod) do
+        pcall(function()
+            local live = workspace:FindFirstChild("Live")
+            local char = (live and live:FindFirstChild(plr.Name)) or plr.Character
+            if char then
+                local torso = char:FindFirstChild("UpperTorso")
+                if torso then
+                    torso.Size         = og.size
+                    torso.Transparency = og.transparency
+                    torso.CanCollide   = og.canCollide
+                    torso.Massless     = og.massless
+                    torso.Anchored     = og.anchored
+                end
+            end
+        end)
+    end
+    critMod = {}
+end
+
 RunService.Heartbeat:Connect(function()
     if not getgenv().AlwaysCrit then return end
     for _, plr in ipairs(Players:GetPlayers()) do
@@ -278,13 +292,22 @@ RunService.Heartbeat:Connect(function()
                 if char then
                     local torso = char:FindFirstChild("UpperTorso")
                     if torso and torso:IsA("BasePart") then
+                        if not critMod[plr] then
+                            critMod[plr] = {
+                                size         = torso.Size,
+                                transparency = torso.Transparency,
+                                canCollide   = torso.CanCollide,
+                                massless     = torso.Massless,
+                                anchored     = torso.Anchored,
+                            }
+                        end
                         local sz = getgenv().CritSize
                         pcall(function()
-                            torso.Size        = Vector3.new(sz, sz * 0.5, sz)
+                            torso.Size         = Vector3.new(sz, sz * 0.5, sz)
                             torso.Transparency = getgenv().CritTransparency
-                            torso.CanCollide  = false
-                            torso.Massless    = true
-                            torso.Anchored    = false
+                            torso.CanCollide   = false
+                            torso.Massless     = true
+                            torso.Anchored     = false
                         end)
                     end
                 end
@@ -377,8 +400,12 @@ local function evalHbPlr(plr)
     if not (h and h.Health > 0) then hbRemPlr(plr); return end
     -- Smart hitbox: skip ragdolled / knocked-down players
     if getgenv().SmartHitbox then
+        local isKnocked = false
         local kn = getKnocked(getLiveEntry(plr))
-        if kn and kn.Value == true then hbRemPlr(plr) else hbAddPlr(plr) end
+        if kn and kn.Value == true then isKnocked = true end
+        -- PlatformStand fallback (game may ragdoll via PlatformStand without Knocked value)
+        if not isKnocked and h and h.PlatformStand then isKnocked = true end
+        if isKnocked then hbRemPlr(plr) else hbAddPlr(plr) end
     else
         hbAddPlr(plr)  -- always expand when smart hitbox is off
     end
@@ -516,7 +543,7 @@ local function applyPunchSpeed(mul)
     pConns["MR"]=m.AncestryChanged:Connect(function(_,p)
         if not p then pDisconn(anim); pDisconn(h); spawn(function() applyPunchSpeed() end) end end)
 end
-spawn(function() wait(0.1); applyPunchSpeed() end)
+-- applyPunchSpeed() is called only when the user moves the slider
 
 -- ══════════════════════════════════════════════════
 --  ANTI-WEAVE SYSTEM
@@ -538,7 +565,7 @@ local function connectWeave()
         if getgenv().AntiWeave and c.Name=="WeaveStun" then pcall(function()c:Destroy()end) end end)
     pl.AncestryChanged:Connect(function(_,p) if not p then spawn(function() wait(0.05); connectWeave() end) end end)
 end
-spawn(function() wait(0.1); connectWeave() end)
+-- connectWeave() called only when AntiWeave is toggled ON
 spawn(function() while true do wait(0.15)
     if getgenv().AntiWeave then pcall(function()
         local live=workspace:FindFirstChild("Live")
@@ -547,10 +574,10 @@ spawn(function() while true do wait(0.15)
         if st then st:Destroy() end end) end end end)
 
 -- ══════════════════════════════════════════════════
---  FASTMENT (Speed Boost on LMB with Tool)
+--  PUNCH BOOST (Speed burst on LMB with Tool)
 -- ══════════════════════════════════════════════════
-local BOOST_SPD = 50
-local BOOST_DUR = 0.2
+local BOOST_SPD = 35   -- studs/s, controlled by slider (20-60)
+local BOOST_DUR = 0.18
 local fastConn
 local function enableFastment()
     if fastConn then return end
@@ -628,7 +655,7 @@ end
 --  PANIC  — reset everything and destroy GUI
 -- ══════════════════════════════════════════════════
 local function panic(gui)
-    getgenv().AlwaysCrit     = false
+    disableCrit()
     getgenv().HitboxEnabled  = false
     getgenv().AntiWeave      = false
     getgenv().FastmentEnabled = false
@@ -636,7 +663,8 @@ local function panic(gui)
     getgenv().NoclipEnabled  = false
     getgenv().PlayerESP      = false
     disableFastment(); disableFly()
-    getgenv().WalkSpeed = 12; getgenv().JumpPower = 50; applyWalkSpeed()
+    getgenv().WalkSpeed = 12; getgenv().JumpPower = 50
+    getgenv().WalkSpeedOverride = false; applyWalkSpeed()
     getgenv().PlayerESP = false; disableFPSBoost()
     for p,_ in pairs(hbWL) do hbRemPlr(p) end
     if gui then gui:Destroy() end
@@ -775,14 +803,19 @@ local function applyFOV(v)
     workspace.CurrentCamera.FieldOfView = v
 end
 
-local function applyStretch(on)
+-- ratio: 0 = native, 100 = full 4:3 (1440 wide instead of 1920)
+local function applyStretch(ratio)
     pcall(function()
-        if on then
-            if syn and syn.set_viewport_size then syn.set_viewport_size(Vector2.new(1152,864))
-            elseif setresolution then setresolution(1152,864) end
-        else
+        if ratio <= 0 then
             if syn and syn.set_viewport_size then syn.set_viewport_size(nil)
-            elseif setresolution then setresolution(1920,1080) end
+            elseif setresolution then setresolution(1920, 1080) end
+        else
+            local x = math.round(1920 - (1920 - 1440) * (ratio / 100))
+            if syn and syn.set_viewport_size then
+                syn.set_viewport_size(Vector2.new(x, 1080))
+            elseif setresolution then
+                setresolution(x, 1080)
+            end
         end
     end)
 end
@@ -1388,7 +1421,7 @@ do
     local sc=Tabs["Main"].scroll
     local s1=sec(sc,"MOVEMENT")
     addSld(s1,"Walk Speed",12,250,12,function(v)
-        getgenv().WalkSpeed=v; applyWalkSpeed() end)
+        getgenv().WalkSpeed=v; getgenv().WalkSpeedOverride=true; applyWalkSpeed() end)
     addSld(s1,"Jump Power",0,500,50,function(v)
         getgenv().JumpPower=v end)
     local _,_,setFlyUI = addTgl(s1,"Fly","Float in the air with WASD  (F)",false,function(v)
@@ -1425,9 +1458,6 @@ do
     local s1=sec(sc,"ESP")
     addTgl(s1,"Player ESP","Highlight all enemies through walls",false,function(v)
         getgenv().PlayerESP=v; refreshESP() end)
-    addTgl(s1,"NPC ESP","NPC outlines",false,nil)
-    addTgl(s1,"Name Tags","Floating name labels",false,nil)
-    addTgl(s1,"Health Bars","HP bars above heads",false,nil)
     addDD(s1,"ESP Color",{"Red","White","Purple","Cyan","Team"},"Red",function(v)
         espColorKey=v; refreshESP() end)
     local s2=sec(sc,"RENDERING")
@@ -1435,8 +1465,7 @@ do
     addTgl(s2,"Fullbright","Max brightness — removes all lighting fx",false,function(v)
         applyFullbright(v) end)
     addTgl(s2,"No Fog","Clear map fog",false,function(v) applyNoFog(v) end)
-    addTgl(s2,"Stretched (4:3)","4:3 aspect ratio stretch",false,function(v)
-        applyStretch(v) end)
+    addSld(s2,"Stretch (4:3)",0,100,0,function(v) applyStretch(v) end)
     local s3=sec(sc,"PERFORMANCE")
     addTgl(s3,"FPS Boost","Moves all textures into ReplicatedStorage",false,function(v)
         if v then enableFPSBoost() else disableFPSBoost() end end)
@@ -1473,7 +1502,7 @@ do
     local sc=Tabs["Player"].scroll
     local s1=sec(sc,"MOVEMENT")
     addSld(s1,"Walk Speed",12,250,12,function(v)
-        getgenv().WalkSpeed=v; applyWalkSpeed() end)
+        getgenv().WalkSpeed=v; getgenv().WalkSpeedOverride=true; applyWalkSpeed() end)
     addSld(s1,"Jump Power",0,500,50,function(v) getgenv().JumpPower=v end)
 
     -- ── Location teleport ──
@@ -1491,7 +1520,7 @@ do
                     local h=LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
                     if h then h.CFrame=loc[2] end
                 end)
-                notify("Teleport","→ "..selLoc,"ok",2); return
+                notify("Teleport","Go: "..selLoc,"ok",2); return
             end
         end
         notify("Teleport","No locations added yet","warn",2)
@@ -1519,11 +1548,11 @@ do
         TextXAlignment=Enum.TextXAlignment.Left,ZIndex=17,Parent=pRow})
     local rfBtn=mk("TextButton",{AnchorPoint=Vector2.new(1,0.5),BackgroundColor3=T.Surface,
         Position=UDim2.new(1,-104,0.5,0),Size=UDim2.new(0,44,0,26),
-        Text="↺",TextColor3=T.Muted,TextSize=13,Font=FNB,ZIndex=18,Parent=pRow})
+        Text="Ref",TextColor3=T.Muted,TextSize=11,Font=FNB,ZIndex=18,Parent=pRow})
     rnd(rfBtn,5); bdr(rfBtn)
     local tpBtn=mk("TextButton",{AnchorPoint=Vector2.new(1,0.5),BackgroundColor3=T.Accent,
         Position=UDim2.new(1,-56,0.5,0),Size=UDim2.new(0,44,0,26),
-        Text="TP →",TextColor3=T.White,TextSize=11,Font=FNB,ZIndex=18,Parent=pRow})
+        Text="TP",TextColor3=T.White,TextSize=11,Font=FNB,ZIndex=18,Parent=pRow})
     rnd(tpBtn,5); grd(tpBtn,T.AccentL,T.AccentD,90)
     rfBtn.MouseButton1Click:Connect(rebuildPlayerDD)
     tpBtn.MouseButton1Click:Connect(function()
@@ -1533,22 +1562,10 @@ do
         local mh=LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
         if th and mh then
             pcall(function() mh.CFrame=th.CFrame+Vector3.new(2,0,0) end)
-            notify("Teleport","→ "..selPlayer,"ok",2)
+            notify("Teleport","Go: "..selPlayer,"ok",2)
         else notify("Teleport",selPlayer.." not found","err",2) end
     end)
 
-    -- ── Cursor teleport ──
-    local s4=sec(sc,"TELEPORT — CURSOR")
-    addBtn(s4,"To Cursor","Teleport to your mouse position (local)",function()
-        pcall(function()
-            local mouse=LP:GetMouse()
-            local h=LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
-            if h and mouse.Hit then
-                h.CFrame=CFrame.new(mouse.Hit.Position+Vector3.new(0,3,0))
-            end
-        end)
-    end)
-    addKey(s4,"Teleport Key",Enum.KeyCode.T,"tp",nil)
 end
 
 -- ── COMBAT ─────────────────────────────────────────
@@ -1556,7 +1573,8 @@ do
     local sc=Tabs["Combat"].scroll
     local s1=sec(sc,"HITBOX")
     local _,_,setHboxUI=addTgl(s1,"Enable Hitbox","Expand HRP hitbox for enemies",false,function(v)
-        getgenv().HitboxEnabled=v; if v then pcall(applyHitbox) end end)
+        getgenv().HitboxEnabled=v
+        if v then pcall(applyHitbox) else for p,_ in pairs(hbWL) do hbRemPlr(p) end end end)
     UISync.hbox=setHboxUI
     addSld(s1,"HRP Size",1,10,2,function(v)
         getgenv().HitboxSize=v; pcall(applyHitbox) end)
@@ -1565,14 +1583,19 @@ do
     addTgl(s1,"Team Check","Skip players on your team",false,function(v)
         getgenv().HitboxTeamCheck=v end)
     addTgl(s1,"Smart Box","Ignore ragdolled / knocked players",false,function(v)
-        getgenv().SmartHitbox=v end)
+        getgenv().SmartHitbox=v
+        if v then
+            for _, plr in ipairs(Players:GetPlayers()) do pcall(function() evalHbPlr(plr) end) end
+        end
+    end)
     local _,_,setAwUI=addTgl(s1,"Anti-Weave","Destroy WeaveStun instances",false,function(v)
-        getgenv().AntiWeave=v end)
+        getgenv().AntiWeave=v
+        if v then spawn(function() connectWeave() end) end end)
     UISync.aw=setAwUI
 
     local s2=sec(sc,"ALWAYS CRIT")
     local _,_,setCritUI=addTgl(s2,"Enable Crit","Forces UpperTorso crit hitbox",false,function(v)
-        getgenv().AlwaysCrit=v end)
+        if v then getgenv().AlwaysCrit=true else disableCrit() end end)
     UISync.crit=setCritUI
     addSld(s2,"Crit Size",1,15,6,function(v) getgenv().CritSize=v end)
     addSld(s2,"Crit Transparency",0,100,80,function(v) getgenv().CritTransparency=v/100 end)
@@ -1613,14 +1636,15 @@ do
     UserInputService.InputEnded:Connect(function(i)
         if i.UserInputType==Enum.UserInputType.MouseButton1 then psDrag=false end end)
 
-    local _,_,setFastUI=addTgl(s3,"Fastment","Speed boost on LMB with a tool equipped",false,function(v)
+    local _,_,setPBUI=addTgl(s3,"Punch Boost","Speed burst on LMB with a tool equipped",false,function(v)
         getgenv().FastmentEnabled=v
         if v then enableFastment() else disableFastment() end end)
-    UISync.fastment=setFastUI
-    addKey(s3,"Fastment Hotkey",nil,"fastment",nil)
+    UISync.fastment=setPBUI
+    addSld(s3,"Boost Strength",20,60,35,function(v) BOOST_SPD=v end)
+    addKey(s3,"Punch Boost Hotkey",nil,"fastment",nil)
 
     local s4=sec(sc,"PANIC")
-    addBtn(s4,"⚠  PANIC","Reset everything & destroy hub",function()
+    addBtn(s4,"PANIC","Reset everything & destroy hub",function()
         panic(GUI) end, Color3.fromRGB(180,40,40))
 end
 
@@ -1649,48 +1673,96 @@ do
         kbBind("hbox",k,function()
             local v=not getgenv().HitboxEnabled; getgenv().HitboxEnabled=v
             if UISync.hbox then UISync.hbox(v) end
-            if v then pcall(applyHitbox) end
+            if v then pcall(applyHitbox) else for p,_ in pairs(hbWL) do hbRemPlr(p) end end
             notify("Hitbox",v and "ON" or "OFF",v and "ok" or "warn",1.5)
         end) end)
     addKey(sk,"Anti-Weave",nil,"aw",function(k)
         kbBind("aw",k,function()
             local v=not getgenv().AntiWeave; getgenv().AntiWeave=v
             if UISync.aw then UISync.aw(v) end
+            if v then spawn(function() connectWeave() end) end
             notify("Anti-Weave",v and "ON" or "OFF",v and "ok" or "warn",1.5)
         end) end)
-    addKey(sk,"Fastment",nil,"fastment",function(k)
+    addKey(sk,"Punch Boost",nil,"fastment",function(k)
         kbBind("fastment",k,function()
             local v=not getgenv().FastmentEnabled; getgenv().FastmentEnabled=v
             if UISync.fastment then UISync.fastment(v) end
             if v then enableFastment() else disableFastment() end
-            notify("Fastment",v and "ON" or "OFF",v and "ok" or "warn",1.5)
+            notify("Punch Boost",v and "ON" or "OFF",v and "ok" or "warn",1.5)
         end) end)
 
     -- Interface
     local si=sec(sc,"INTERFACE")
     addTgl(si,"Debug Info","Show PlaceID / Job / Players",false,function(v)
         DBG.Visible=v end)
-    addDD(si,"Theme",{"Dark","Bright"},"Dark",function(v)
-        if v=="Bright" then
-            tw(WIN, {BackgroundColor3=Color3.fromRGB(228,228,242)},0.3)
-            tw(TB,  {BackgroundColor3=Color3.fromRGB(210,210,230)},0.3)
-            tw(SB,  {BackgroundColor3=Color3.fromRGB(210,210,230)},0.3)
-            tw(STAT,{BackgroundColor3=Color3.fromRGB(196,196,218)},0.3)
-        else
-            tw(WIN, {BackgroundColor3=T.BG},      0.3)
-            tw(TB,  {BackgroundColor3=T.Surface}, 0.3)
-            tw(SB,  {BackgroundColor3=T.Surface}, 0.3)
-            tw(STAT,{BackgroundColor3=T.StatBG},  0.3)
+    -- ── Theme ─────────────────────────────────────────
+    -- Palette: dark colors → bright replacements
+    local function c3eq(a,b)
+        return math.abs(a.R-b.R)<0.01 and math.abs(a.G-b.G)<0.01 and math.abs(a.B-b.B)<0.01
+    end
+    local BRT = {  -- bright alternatives for each dark palette entry
+        {T.BG,      Color3.fromRGB(232,232,245)},
+        {T.Surface, Color3.fromRGB(218,218,235)},
+        {T.Card,    Color3.fromRGB(208,208,228)},
+        {T.CardH,   Color3.fromRGB(196,196,220)},
+        {T.Track,   Color3.fromRGB(178,178,205)},
+        {T.Border,  Color3.fromRGB(190,190,215)},
+        {T.StatBG,  Color3.fromRGB(222,222,240)},
+        {T.Text,    Color3.fromRGB(18, 18,  40)},
+        {T.Muted,   Color3.fromRGB(72, 72, 118)},
+        -- inline colors used in row/sec/notification/dropdown builds
+        {Color3.fromRGB(16,16,28),  Color3.fromRGB(226,226,242)},
+        {Color3.fromRGB(18,18,30),  Color3.fromRGB(220,220,238)},
+        {Color3.fromRGB(28,18,52),  Color3.fromRGB(200,188,230)},
+        {Color3.fromRGB(28,28,46),  Color3.fromRGB(193,193,218)},
+        {Color3.fromRGB(22,22,34),  Color3.fromRGB(208,208,228)},  -- same as Card but explicit
+    }
+    local function applyTheme(name)
+        local toBright = (name == "Bright")
+        local function remap(col)
+            for _, p in ipairs(BRT) do
+                local from = toBright and p[1] or p[2]
+                local to   = toBright and p[2] or p[1]
+                if c3eq(col, from) then return to end
+            end
+            return col
         end
-    end)
-    -- UI Opacity affects entire hub (WIN + TB + SB + STAT + WM)
+        for _, obj in pairs(GUI:GetDescendants()) do
+            pcall(function()
+                if obj:IsA("GuiObject") then
+                    obj.BackgroundColor3 = remap(obj.BackgroundColor3)
+                end
+                if obj:IsA("TextLabel") or obj:IsA("TextButton") or obj:IsA("TextBox") then
+                    obj.TextColor3 = remap(obj.TextColor3)
+                end
+                if obj:IsA("UIStroke") then
+                    obj.Color = remap(obj.Color)
+                end
+            end)
+        end
+    end
+    addDD(si,"Theme",{"Dark","Bright"},"Dark",function(v) applyTheme(v) end)
+
+    -- ── UI Opacity ─────────────────────────────────────
+    local uiBaseTransp = nil  -- captured on first use
+    local function captureBase()
+        uiBaseTransp = {}
+        for _, obj in pairs(GUI:GetDescendants()) do
+            pcall(function()
+                if obj:IsA("GuiObject") then uiBaseTransp[obj] = obj.BackgroundTransparency end
+            end)
+        end
+        -- also watermark
+        uiBaseTransp[WM] = WM.BackgroundTransparency
+    end
     addSld(si,"UI Opacity",10,100,100,function(v)
-        local tr=(100-v)/100
-        tw(WIN, {BackgroundTransparency=tr},        0.08)
-        tw(TB,  {BackgroundTransparency=tr},        0.08)
-        tw(SB,  {BackgroundTransparency=tr},        0.08)
-        tw(STAT,{BackgroundTransparency=tr},        0.08)
-        tw(WM,  {BackgroundTransparency=math.min(0.92,tr+0.15)},0.08)
+        if not uiBaseTransp then captureBase() end
+        local mult = v / 100
+        for obj, base in pairs(uiBaseTransp) do
+            pcall(function()
+                obj.BackgroundTransparency = 1 - mult * (1 - base)
+            end)
+        end
     end)
 
     -- Server
