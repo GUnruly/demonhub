@@ -30,11 +30,12 @@ getgenv().HitboxEnabled     = getgenv().HitboxEnabled     or false
 getgenv().HitboxSize        = getgenv().HitboxSize        or 2
 getgenv().HitboxTransp      = getgenv().HitboxTransp      or 0.4
 getgenv().AntiWeave         = getgenv().AntiWeave         or false
-getgenv().PunchSpeed        = getgenv().PunchSpeed        or 1.7
+getgenv().PunchSpeed        = getgenv().PunchSpeed        or 1.0
 getgenv().FastmentEnabled   = getgenv().FastmentEnabled   or false
 getgenv().WalkSpeedOverride = getgenv().WalkSpeedOverride or false
 getgenv().Headless          = getgenv().Headless          or false
 getgenv().SavedAccIDs       = getgenv().SavedAccIDs       or {}
+getgenv().ClickTPEnabled    = getgenv().ClickTPEnabled    or false
 
 -- ══════════════════════════════════════════════════
 --  KEYBIND MANAGER
@@ -611,6 +612,37 @@ local function disableFastment()
 end
 
 -- ══════════════════════════════════════════════════
+--  CLICK TELEPORT (equip tool → click to TP to mouse)
+-- ══════════════════════════════════════════════════
+local ctpTool = nil
+disableClickTP = function()
+    getgenv().ClickTPEnabled = false
+    if ctpTool then pcall(function() ctpTool:Destroy() end); ctpTool = nil end
+end
+local function enableClickTP()
+    disableClickTP()  -- clean up any previous tool
+    getgenv().ClickTPEnabled = true
+    local tool = Instance.new("Tool")
+    tool.Name           = "_DH_ClickTP"
+    tool.RequiresHandle = false
+    tool.CanBeDropped   = false
+    tool.ToolTip        = "Click to Teleport"
+    ctpTool = tool
+    tool.Activated:Connect(function()
+        if not getgenv().ClickTPEnabled then disableClickTP(); return end
+        local mouse = LP:GetMouse()
+        local c     = LP.Character
+        local hrp   = c and c:FindFirstChild("HumanoidRootPart")
+        if hrp and mouse.Hit then
+            pcall(function()
+                hrp.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3.5, 0))
+            end)
+        end
+    end)
+    tool.Parent = LP.Backpack
+end
+
+-- ══════════════════════════════════════════════════
 --  SERVER FUNCTIONS
 -- ══════════════════════════════════════════════════
 local function rejoin()
@@ -644,7 +676,9 @@ end
 
 local function copyJoinLink()
     pcall(function()
-        setclipboard("https://www.roblox.com/games/"..tostring(game.PlaceId))
+        local link = "roblox://experiences/start?placeId="..tostring(game.PlaceId)
+            .."&gameInstanceId="..tostring(game.JobId)
+        setclipboard(link)
     end)
 end
 
@@ -654,21 +688,57 @@ local function teleportToPlace()
 end
 
 -- ══════════════════════════════════════════════════
+--  CLICK TELEPORT  (Tool-based)
+-- ══════════════════════════════════════════════════
+local clickTpTool = nil
+local function enableClickTP()
+    if clickTpTool then return end
+    local tool = Instance.new("Tool")
+    tool.Name = "_DH_ClickTP"
+    tool.RequiresHandle = false
+    tool.CanBeDropped = false
+    tool.ToolTip = "Click anywhere to teleport"
+    tool.Parent = LP.Backpack
+    clickTpTool = tool
+    tool.Activated:Connect(function()
+        pcall(function()
+            local mouse = LP:GetMouse()
+            local hrp = LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
+            if hrp and mouse.Hit then
+                hrp.CFrame = CFrame.new(mouse.Hit.Position + Vector3.new(0, 3, 0))
+            end
+        end)
+    end)
+end
+local function disableClickTP()
+    if clickTpTool then
+        pcall(function() clickTpTool:Destroy() end)
+        clickTpTool = nil
+    end
+end
+
+-- ══════════════════════════════════════════════════
 --  PANIC  — reset everything and destroy GUI
 -- ══════════════════════════════════════════════════
+-- Forward declarations for functions defined later in the file
+local disableFPSBoost    -- defined at FPS BOOSTER section
+local applyHeadless      -- defined at SELF section
+-- disableClickTP is a local function defined above panic — no forward decl needed
 local function panic(gui)
     disableCrit()
-    getgenv().HitboxEnabled  = false
-    getgenv().AntiWeave      = false
+    getgenv().HitboxEnabled   = false
+    getgenv().AntiWeave       = false
     getgenv().FastmentEnabled = false
-    getgenv().FlyEnabled     = false
-    getgenv().NoclipEnabled  = false
-    getgenv().PlayerESP      = false
-    getgenv().Headless       = false
+    getgenv().FlyEnabled      = false
+    getgenv().NoclipEnabled   = false
+    getgenv().PlayerESP       = false
+    getgenv().Headless        = false
+    getgenv().ClickTPEnabled  = false
     disableFastment(); disableFly()
-    pcall(function() applyHeadless(false) end)
+    if disableFPSBoost   then disableFPSBoost()   end
+    if applyHeadless     then applyHeadless(false) end
+    if disableClickTP    then disableClickTP()     end
     getgenv().WalkSpeed = 12; getgenv().WalkSpeedOverride = false; applyWalkSpeed()
-    getgenv().PlayerESP = false; disableFPSBoost()
     for p,_ in pairs(hbWL) do hbRemPlr(p) end
     if gui then gui:Destroy() end
 end
@@ -908,7 +978,7 @@ local function enableFPSBoost()
     end
 end
 
-local function disableFPSBoost()
+disableFPSBoost = function()
     if not fpsBoosted then return end; fpsBoosted = false
     for _, e in pairs(fpsStash) do
         pcall(function()
@@ -959,7 +1029,7 @@ local function attachAccessory(character, id)
 end
 
 -- Headless: hide Head + all Decals on it
-local function applyHeadless(on)
+applyHeadless = function(on)
     getgenv().Headless = on
     pcall(function()
         local c = LP.Character; if not c then return end
@@ -1085,7 +1155,7 @@ local WM = mk("Frame",{BackgroundColor3=Color3.fromRGB(12,12,20),BackgroundTrans
 rnd(WM,6); bdr(WM)
 local WMDOT = mk("Frame",{BackgroundColor3=T.Accent,Position=UDim2.new(0,10,0.5,-4),
     Size=UDim2.new(0,8,0,8),ZIndex=21,Parent=WM}); rnd(WMDOT,4)
-mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,26,0,0),
+local WMLBL=mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,26,0,0),
     Size=UDim2.new(1,-30,1,0),Text="DemonHub  •  "..LP.Name,
     TextColor3=T.Muted,TextSize=11,Font=FN,
     TextXAlignment=Enum.TextXAlignment.Left,ZIndex=21,Parent=WM})
@@ -1104,15 +1174,21 @@ RunService.Heartbeat:Connect(function()
 
 -- Debug Overlay
 local DBG = mk("Frame",{BackgroundColor3=Color3.fromRGB(0,0,0),BackgroundTransparency=0.45,
-    Position=UDim2.new(0,12,0,46),Size=UDim2.new(0,214,0,44),ZIndex=21,Visible=false,Parent=GUI})
+    Position=UDim2.new(0,12,0,46),Size=UDim2.new(0,214,0,58),ZIndex=21,Visible=false,Parent=GUI})
 rnd(DBG,6); bdr(DBG)
 local DBGL=mk("TextLabel",{BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),
-    Text="",TextColor3=T.Muted,TextSize=10,Font=FN,ZIndex=22,Parent=DBG})
-do local u=Instance.new("UIPadding"); u.PaddingTop=UDim.new(0,4); u.PaddingLeft=UDim.new(0,8); u.Parent=DBG end
+    Text="",TextColor3=T.Muted,TextSize=10,Font=FN,
+    TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,
+    ZIndex=22,Parent=DBG})
+do local u=Instance.new("UIPadding"); u.PaddingTop=UDim.new(0,5); u.PaddingLeft=UDim.new(0,8); u.Parent=DBG end
 RunService.Heartbeat:Connect(function()
     if not DBG.Visible then return end
-    DBGL.Text = string.format("PlaceID: %d\nJob: %s...\nPlayers: %d",
-        game.PlaceId, game.JobId:sub(1,10), #Players:GetPlayers())
+    local c = LP.Character
+    local hrp = c and c:FindFirstChild("HumanoidRootPart")
+    local pos = hrp and hrp.Position or Vector3.new(0,0,0)
+    DBGL.Text = string.format("PlaceID: %d\nJob: %s...\nPlayers: %d\nPos: %.1f, %.1f, %.1f",
+        game.PlaceId, game.JobId:sub(1,10), #Players:GetPlayers(),
+        pos.X, pos.Y, pos.Z)
 end)
 
 -- ══════════════════════════════════════════════════
@@ -1179,6 +1255,7 @@ mk("UIListLayout",{FillDirection=Enum.FillDirection.Vertical,Padding=UDim.new(0,
 
 -- ── Content ────────────────────────────────────────
 local CA=mk("Frame",{BackgroundTransparency=1,Position=UDim2.new(0,152,0,50),Size=UDim2.new(0,448,0,368),ZIndex=11,Parent=WIN})
+local credPage  -- forward-declared; built after tab loop
 
 -- ── Status bar ─────────────────────────────────────
 local STAT=mk("Frame",{BackgroundColor3=T.StatBG,Position=UDim2.new(0,0,0,418),Size=UDim2.new(1,0,0,32),ZIndex=12,Parent=WIN})
@@ -1224,6 +1301,10 @@ local function switchTab(id)
     tw(tab.btn,{BackgroundTransparency=0,BackgroundColor3=Color3.fromRGB(28,18,54)},S)
     tw(tab.ico,{TextColor3=T.AccentL},S); tw(tab.lbl,{TextColor3=T.Text},S)
     tab.page.Visible=true
+    if credPage then credPage.Visible = false end
+    if credBtnActive ~= nil then credBtnActive = false end
+    if credBtn then tw(credBtn,{BackgroundColor3=Color3.fromRGB(20,12,36)},SF) end
+    if IND then IND.Visible = true end
     tw(IND,{Position=UDim2.new(0,0,0,indY(tab.idx))},S)
 end
 
@@ -1642,6 +1723,11 @@ do
     local s1=sec(sc,"MOVEMENT")
     addSld(s1,"Walk Speed",12,250,12,function(v)
         getgenv().WalkSpeed=v; getgenv().WalkSpeedOverride=true; applyWalkSpeed() end)
+    local _,_,setCtpUI = addTgl(s1,"Click Teleport",
+        "Equip tool, then click anywhere to teleport",false,function(v)
+        getgenv().ClickTPEnabled=v
+        if v then enableClickTP() else disableClickTP() end end)
+    UISync.clicktp = setCtpUI
 
     -- ── Location teleport ──
     local s2=sec(sc,"TELEPORT — LOCATION")
@@ -1704,6 +1790,11 @@ do
         else notify("Teleport",selPlayer.." not found","err",2) end
     end)
 
+    -- ── Click Teleport ──
+    local s4=sec(sc,"CLICK TELEPORT")
+    addTgl(s4,"Click Teleport","Equip tool then click anywhere to TP",false,function(v)
+        if v then enableClickTP() else disableClickTP() end end)
+
 end
 
 -- ── COMBAT ─────────────────────────────────────────
@@ -1741,32 +1832,38 @@ do
         getgenv().TeamCheck=v end)
 
     local s3=sec(sc,"COMBAT UTILS")
-    -- Punch speed: 10-100 → ×1.0-×10.0 in steps of ×0.1
-    local psRow=row(s3,54)
-    mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,12,0,7),Size=UDim2.new(0.6,0,0,16),
+    -- Punch Speed  raw 1-50 → x0.1-x5.0  |  raw=10 → x1.0 = original speed (Philly only)
+    local psRow=row(s3,62)
+    mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,12,0,6),Size=UDim2.new(0.55,0,0,16),
         Text="Punch Speed",TextColor3=T.Text,TextSize=13,Font=FN,
         TextXAlignment=Enum.TextXAlignment.Left,ZIndex=17,Parent=psRow})
+    mk("TextLabel",{BackgroundTransparency=1,Position=UDim2.new(0,12,0,23),Size=UDim2.new(0.7,0,0,12),
+        Text="(Philly only!)",TextColor3=T.Muted,TextSize=9,Font=FN,
+        TextXAlignment=Enum.TextXAlignment.Left,ZIndex=17,Parent=psRow})
     local psLbl=mk("TextLabel",{AnchorPoint=Vector2.new(1,0),BackgroundTransparency=1,
-        Position=UDim2.new(1,-12,0,7),Size=UDim2.new(0,52,0,16),Text="×1.0",
+        Position=UDim2.new(1,-12,0,6),Size=UDim2.new(0,52,0,16),Text="x1.0",
         TextColor3=T.AccentL,TextSize=12,Font=FNB,TextXAlignment=Enum.TextXAlignment.Right,ZIndex=17,Parent=psRow})
-    local psTrk=mk("Frame",{BackgroundColor3=T.Track,Position=UDim2.new(0,12,0,34),
+    local psTrk=mk("Frame",{BackgroundColor3=T.Track,Position=UDim2.new(0,12,0,42),
         Size=UDim2.new(1,-24,0,6),ZIndex=16,Parent=psRow}); rnd(psTrk,3)
-    local psFill=mk("Frame",{BackgroundColor3=T.Accent,Size=UDim2.new(0,1,0,1),ZIndex=17,Parent=psTrk})
+    -- raw=10 → x1.0 (normal);  p = (10-1)/(50-1) = 9/49
+    local psDefP = 9/49
+    local psFill=mk("Frame",{BackgroundColor3=T.Accent,Size=UDim2.new(psDefP,0,1,0),ZIndex=17,Parent=psTrk})
     rnd(psFill,3); grd(psFill,T.AccentL,T.AccentD,0)
     local psKnob=mk("Frame",{AnchorPoint=Vector2.new(0.5,0.5),BackgroundColor3=T.White,
-        Position=UDim2.new(0,0,0.5,0),Size=UDim2.new(0,14,0,14),ZIndex=18,Parent=psTrk})
+        Position=UDim2.new(psDefP,0,0.5,0),Size=UDim2.new(0,14,0,14),ZIndex=18,Parent=psTrk})
     rnd(psKnob,7); bdr(psKnob,T.Accent,2)
     local psHit=mk("TextButton",{BackgroundTransparency=1,Position=UDim2.new(0,-8,0,-8),
         Size=UDim2.new(1,16,1,16),Text="",ZIndex=19,Parent=psTrk})
     local psDrag=false
     local function psUpd(x)
-        local rel=math.clamp((x-psTrk.AbsolutePosition.X)/psTrk.AbsoluteSize.X,0,1)
-        local raw=math.round(10+(100-10)*rel)  -- 10..100
-        local p=(raw-10)/(100-10)
+        local rel = math.clamp((x-psTrk.AbsolutePosition.X)/psTrk.AbsoluteSize.X, 0, 1)
+        local raw = math.round(1 + (50-1)*rel)   -- 1..50
+        local p   = (raw-1)/(50-1)
         tw(psFill,{Size=UDim2.new(p,0,1,0)},0.05)
         tw(psKnob,{Position=UDim2.new(p,0,0.5,0)},0.05)
-        psLbl.Text=string.format("×%.1f",raw/10)
-        local spd=raw/10; getgenv().PunchSpeed=spd; applyPunchSpeed(spd)
+        local spd = raw * 0.1   -- x0.1 .. x5.0  (raw=10 → x1.0 = normal)
+        psLbl.Text = string.format("x%.1f", spd)
+        getgenv().PunchSpeed = spd; applyPunchSpeed(spd)
     end
     psHit.MouseButton1Down:Connect(function(x) psDrag=true; psUpd(x) end)
     UserInputService.InputChanged:Connect(function(i)
@@ -1778,7 +1875,7 @@ do
         getgenv().FastmentEnabled=v
         if v then enableFastment() else disableFastment() end end)
     UISync.fastment=setPBUI
-    addSld(s3,"Boost Strength",20,60,35,function(v) BOOST_SPD=v end)
+    addSld(s3,"Boost Strength",20,120,35,function(v) BOOST_SPD=v end)
     addKey(s3,"Punch Boost Hotkey",nil,"fastment",nil)
 
     local s4=sec(sc,"PANIC")
@@ -1935,8 +2032,12 @@ do
 
     -- Interface
     local si=sec(sc,"INTERFACE")
-    addTgl(si,"Debug Info","Show PlaceID / Job / Players",false,function(v)
+    addTgl(si,"Watermark","Show/hide top-left watermark",true,function(v)
+        WM.Visible=v end)
+    addTgl(si,"Debug Info","Show PlaceID / Job / Players / Coords",false,function(v)
         DBG.Visible=v end)
+    addInp(si,"Watermark Text","DemonHub",function(v)
+        if v and v~="" then WMLBL.Text=v.."  •  "..LP.Name end end)
     -- ── Theme ─────────────────────────────────────────
     -- Palette: dark colors → bright replacements
     local function c3eq(a,b)
@@ -1952,12 +2053,17 @@ do
         {T.StatBG,  Color3.fromRGB(222,222,240)},
         {T.Text,    Color3.fromRGB(18, 18,  40)},
         {T.Muted,   Color3.fromRGB(72, 72, 118)},
+        -- UIGradient endpoint colors (dark ends of WIN/TB/SB gradients)
+        {Color3.fromRGB(18,12,34),  Color3.fromRGB(228,222,248)},
+        {Color3.fromRGB(20,14,38),  Color3.fromRGB(230,225,248)},
+        {Color3.fromRGB(13,13,22),  Color3.fromRGB(215,215,235)},
         -- inline colors used in row/sec/notification/dropdown builds
         {Color3.fromRGB(16,16,28),  Color3.fromRGB(226,226,242)},
         {Color3.fromRGB(18,18,30),  Color3.fromRGB(220,220,238)},
         {Color3.fromRGB(28,18,52),  Color3.fromRGB(200,188,230)},
         {Color3.fromRGB(28,28,46),  Color3.fromRGB(193,193,218)},
         {Color3.fromRGB(22,22,34),  Color3.fromRGB(208,208,228)},  -- same as Card but explicit
+        {Color3.fromRGB(0,  0,  0), Color3.fromRGB(200,200,220)},  -- pure black catch-all
     }
     local function applyTheme(name)
         local toBright = (name == "Bright")
@@ -1979,6 +2085,15 @@ do
                 end
                 if obj:IsA("UIStroke") then
                     obj.Color = remap(obj.Color)
+                end
+                -- Remap UIGradient keypoints — fixes dark gradient accents
+                if obj:IsA("UIGradient") then
+                    local kps = obj.Color.Keypoints
+                    local newKps = {}
+                    for _, kp in ipairs(kps) do
+                        newKps[#newKps+1] = ColorSequenceKeypoint.new(kp.Time, remap(kp.Value))
+                    end
+                    obj.Color = ColorSequence.new(newKps)
                 end
             end)
         end
@@ -2026,6 +2141,91 @@ do
         notify("Teleporting","To Place: "..tostring(id),"info",2)
         spawn(function() wait(1.5); TeleportService:Teleport(id,LP) end) end)
 end
+
+-- ── Credits bottom button (outside TLIST, anchored to SB bottom) ──────
+local credBtnActive = false
+local credBtn = mk("TextButton",{
+    AnchorPoint=Vector2.new(0,1),
+    BackgroundColor3=Color3.fromRGB(20,12,36),
+    Position=UDim2.new(0,9,1,-10),
+    Size=UDim2.new(1,-18,0,28),
+    Text="Credits",
+    TextColor3=T.AccentL, TextSize=11, Font=FNB,
+    ZIndex=13, Parent=SB
+})
+rnd(credBtn,6); bdr(credBtn,T.Accent)
+
+-- ── Credits page (in CA, like a tab page but not in Tabs{}) ──────────
+credPage = mk("Frame",{BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),Visible=false,ZIndex=12,Parent=CA})
+-- Center card
+local credCard = mk("Frame",{
+    AnchorPoint=Vector2.new(0.5,0.5),
+    BackgroundColor3=T.Card,
+    Position=UDim2.new(0.5,0,0.5,-10),
+    Size=UDim2.new(0,280,0,220),
+    ZIndex=13,Parent=credPage
+})
+rnd(credCard,14); bdr(credCard,T.Accent)
+grd(credCard,Color3.fromRGB(22,14,42),T.Card,145)
+
+-- Avatar image (top center)
+local credImg = mk("ImageLabel",{
+    AnchorPoint=Vector2.new(0.5,0),
+    BackgroundColor3=T.Accent,
+    Position=UDim2.new(0.5,0,0,20),
+    Size=UDim2.new(0,72,0,72),
+    Image="rbxassetid://0",
+    ZIndex=14,Parent=credCard
+})
+rnd(credImg,36); bdr(credImg,T.AccentL)
+
+mk("TextLabel",{AnchorPoint=Vector2.new(0.5,0),BackgroundTransparency=1,
+    Position=UDim2.new(0.5,0,0,104),Size=UDim2.new(1,-24,0,22),
+    Text="Moneroonly",TextColor3=T.Text,TextSize=16,Font=FNB,ZIndex=14,Parent=credCard})
+mk("TextLabel",{AnchorPoint=Vector2.new(0.5,0),BackgroundTransparency=1,
+    Position=UDim2.new(0.5,0,0,126),Size=UDim2.new(1,-24,0,16),
+    Text="Creator of Demon Hub",TextColor3=T.Muted,TextSize=10,Font=FN,ZIndex=14,Parent=credCard})
+
+-- Divider
+mk("Frame",{AnchorPoint=Vector2.new(0.5,0),BackgroundColor3=T.Border,
+    Position=UDim2.new(0.5,0,0,152),Size=UDim2.new(1,-40,0,1),ZIndex=14,Parent=credCard})
+
+mk("TextLabel",{AnchorPoint=Vector2.new(0.5,0),BackgroundTransparency=1,
+    Position=UDim2.new(0.5,0,0,162),Size=UDim2.new(1,-24,0,16),
+    Text="Discord:  phtda",TextColor3=T.AccentL,TextSize=12,Font=FNB,ZIndex=14,Parent=credCard})
+mk("TextLabel",{AnchorPoint=Vector2.new(0.5,0),BackgroundTransparency=1,
+    Position=UDim2.new(0.5,0,0,184),Size=UDim2.new(1,-24,0,14),
+    Text="Demon Hub  v2.0",TextColor3=T.Muted,TextSize=10,Font=FN,ZIndex=14,Parent=credCard})
+
+-- Async-fetch Moneroonly's userId for their avatar thumbnail
+spawn(function()
+    local ok, uid = pcall(function()
+        return Players:GetUserIdFromNameAsync("Moneroonly")
+    end)
+    if ok and uid then
+        credImg.Image = "rbxthumb://type=AvatarHeadShot&id="..uid.."&w=150&h=150"
+    end
+end)
+
+credBtn.MouseButton1Click:Connect(function()
+    credBtnActive = not credBtnActive
+    if credBtnActive then
+        -- Hide current tab page
+        if CurTab then Tabs[CurTab].page.Visible = false end
+        credPage.Visible = true
+        tw(credBtn,{BackgroundColor3=Color3.fromRGB(40,20,70)},SF)
+        IND.Visible = false
+    else
+        credPage.Visible = false
+        if CurTab then Tabs[CurTab].page.Visible = true end
+        tw(credBtn,{BackgroundColor3=Color3.fromRGB(20,12,36)},SF)
+        IND.Visible = true
+    end
+end)
+credBtn.MouseEnter:Connect(function()
+    if not credBtnActive then tw(credBtn,{BackgroundColor3=Color3.fromRGB(30,16,54)},SF) end end)
+credBtn.MouseLeave:Connect(function()
+    if not credBtnActive then tw(credBtn,{BackgroundColor3=Color3.fromRGB(20,12,36)},SF) end end)
 
 -- ══════════════════════════════════════════════════
 --  REGISTER DEFAULT KEYBINDS
